@@ -4,7 +4,8 @@ requires-python = ">=3.9"
 resolution-markers = [
     "python_full_version >= '3.15'",
     "python_full_version >= '3.10' and python_full_version < '3.15'",
-    "python_full_version < '3.10'",
+    "python_full_version > '3.9' and python_full_version < '3.10'",
+    "python_full_version <= '3.9'",
 ]
 
 [[package]]
@@ -79,7 +80,8 @@ name = "coverage"
 version = "7.10.7"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version < '3.10'",
+    "python_full_version > '3.9' and python_full_version < '3.10'",
+    "python_full_version <= '3.9'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/51/26/d22c300112504f5f9a9fd2297ce33c35f3d353e4aeb987c8419453b2a7c2/coverage-7.10.7.tar.gz", hash = "sha256:f4ab143ab113be368a3e9b795f9cd7906c5ef407d6173fe9675a902e1fffc239", size = 827704, upload-time = "2025-09-21T20:03:56.815Z" }
 wheels = [
@@ -317,7 +319,8 @@ name = "iniconfig"
 version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version < '3.10'",
+    "python_full_version > '3.9' and python_full_version < '3.10'",
+    "python_full_version <= '3.9'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f2/97/ebf4da567aa6827c909642694d71c9fcf53e5b504f2d96afea02718862f3/iniconfig-2.1.0.tar.gz", hash = "sha256:3abbd2e30b36733fee78f9c7f7308f2d0050e88f0087fd25c2645f63c773e1c7", size = 4793, upload-time = "2025-03-19T20:09:59.721Z" }
 wheels = [
@@ -342,7 +345,8 @@ name = "jedi"
 version = "0.19.2"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version < '3.10'",
+    "python_full_version > '3.9' and python_full_version < '3.10'",
+    "python_full_version <= '3.9'",
 ]
 dependencies = [
     { name = "parso", marker = "python_full_version < '3.10'" },
@@ -470,7 +474,8 @@ name = "mypy"
 version = "1.19.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version < '3.10'",
+    "python_full_version > '3.9' and python_full_version < '3.10'",
+    "python_full_version <= '3.9'",
 ]
 dependencies = [
     { name = "librt", marker = "python_full_version < '3.10' and platform_python_implementation != 'PyPy'" },
@@ -658,7 +663,7 @@ wheels = [
 
 [[package]]
 name = "py2max"
-version = "0.2.1"
+version = "0.3.0"
 source = { editable = "../py2max" }
 
 [package.metadata]
@@ -673,10 +678,8 @@ dev = [
     { name = "twine", specifier = ">=6.2.0" },
 ]
 docs = [
-    { name = "myst-parser", specifier = ">=0.18.0" },
-    { name = "sphinx", specifier = ">=4.0.0" },
-    { name = "sphinx-autodoc-typehints", specifier = ">=1.12.0" },
-    { name = "sphinx-rtd-theme", specifier = ">=1.0.0" },
+    { name = "mkdocs-material", specifier = ">=9.5" },
+    { name = "mkdocstrings", extras = ["python"], specifier = ">=0.24" },
 ]
 
 [[package]]
@@ -732,7 +735,8 @@ name = "pytest"
 version = "8.4.2"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version < '3.10'",
+    "python_full_version > '3.9' and python_full_version < '3.10'",
+    "python_full_version <= '3.9'",
 ]
 dependencies = [
     { name = "colorama", marker = "python_full_version < '3.10' and sys_platform == 'win32'" },
@@ -775,7 +779,8 @@ name = "pytest-asyncio"
 version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version < '3.10'",
+    "python_full_version > '3.9' and python_full_version < '3.10'",
+    "python_full_version <= '3.9'",
 ]
 dependencies = [
     { name = "backports-asyncio-runner", marker = "python_full_version < '3.10'" },
@@ -923,7 +928,8 @@ name = "websockets"
 version = "15.0.1"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version < '3.10'",
+    "python_full_version > '3.9' and python_full_version < '3.10'",
+    "python_full_version <= '3.9'",
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/21/e6/26d09fab466b7ca9c7737474c52be4f76a40301b08362eb2dbc19dcc16c1/websockets-15.0.1.tar.gz", hash = "sha256:82544de02076bafba038ce055ee6412d68da13ab47f0c60cab827346de828dee", size = 177016, upload-time = "2025-03-05T20:03:41.606Z" }
 wheels = [

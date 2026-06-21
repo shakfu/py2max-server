@@ -6,6 +6,7 @@ __pycache__/
 *$py.class
 
 .*_cache
+outputs/
 
 # C extensions
 *.so
