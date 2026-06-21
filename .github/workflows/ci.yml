@@ -1,0 +1,120 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test on Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
+
+    steps:
+      - name: Checkout py2max-server
+        uses: actions/checkout@v4
+        with:
+          path: py2max-server
+
+      # py2max is a path dependency (see [tool.uv.sources]); check it out as a
+      # sibling directory so uv can resolve it. Override the ref via the
+      # PY2MAX_REF repository variable if you need a specific branch/tag.
+      - name: Checkout py2max (core)
+        uses: actions/checkout@v4
+        with:
+          repository: shakfu/py2max
+          ref: ${{ vars.PY2MAX_REF || 'main' }}
+          path: py2max
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+        working-directory: py2max-server
+
+      - name: Install dependencies
+        run: uv sync
+        working-directory: py2max-server
+
+      - name: Run tests
+        run: uv run pytest --cov=py2max_server --cov-report=xml --cov-report=term
+        working-directory: py2max-server
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout py2max-server
+        uses: actions/checkout@v4
+        with:
+          path: py2max-server
+
+      - name: Checkout py2max (core)
+        uses: actions/checkout@v4
+        with:
+          repository: shakfu/py2max
+          ref: ${{ vars.PY2MAX_REF || 'main' }}
+          path: py2max
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+        working-directory: py2max-server
+
+      - name: Install dependencies
+        run: uv sync
+        working-directory: py2max-server
+
+      - name: Run ruff
+        run: uv run ruff check .
+        working-directory: py2max-server
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+        working-directory: py2max-server
+
+  typecheck:
+    name: Type Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout py2max-server
+        uses: actions/checkout@v4
+        with:
+          path: py2max-server
+
+      - name: Checkout py2max (core)
+        uses: actions/checkout@v4
+        with:
+          repository: shakfu/py2max
+          ref: ${{ vars.PY2MAX_REF || 'main' }}
+          path: py2max
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+        working-directory: py2max-server
+
+      - name: Install dependencies
+        run: uv sync
+        working-directory: py2max-server
+
+      - name: Run mypy
+        run: uv run mypy py2max_server
+        working-directory: py2max-server

@@ -1,0 +1,63 @@
+[project]
+name = "py2max-server"
+description = "Interactive WebSocket server and remote REPL for live editing of py2max Max/MSP patches."
+authors = [
+    { name = "Shakeeb Alireza", email = "shakfu@users.noreply.github.com" }
+]
+version = "0.1.0"
+readme = "README.md"
+requires-python = ">=3.9"
+keywords = ["Max", "maxpat", "py2max", "websocket", "repl"]
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "py2max>=0.2.1",
+    "websockets>=12.0",
+    "ptpython>=3.0.0",
+]
+
+[project.scripts]
+py2max-server = "py2max_server.cli:main"
+
+# During local development, resolve py2max from the sibling checkout rather than
+# PyPI. Remove this block (or replace with the published version) for release.
+[tool.uv.sources]
+py2max = { path = "../py2max", editable = true }
+
+[dependency-groups]
+dev = [
+    "mypy>=1.4.1",
+    "pytest>=7.4.4",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.11.10",
+]
+
+[project.urls]
+Homepage = "https://github.com/shakfu/py2max-server"
+Repository = "https://github.com/shakfu/py2max-server.git"
+Issues = "https://github.com/shakfu/py2max-server/issues"
+
+[build-system]
+requires = ["uv_build>=0.9.23,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "py2max_server"
+module-root = ""
+# Bundle the browser-editor assets and the test suite into the sdist.
+source-include = ["py2max_server/static/**", "tests/**"]
