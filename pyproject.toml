@@ -4,6 +4,9 @@ description = "Interactive WebSocket server and remote REPL for live editing of 
 authors = [
     { name = "Shakeeb Alireza", email = "shakfu@users.noreply.github.com" }
 ]
+maintainers = [
+    { name = "Shakeeb Alireza", email = "shakfu@users.noreply.github.com" }
+]
 version = "0.1.0"
 readme = "README.md"
 requires-python = ">=3.9"
