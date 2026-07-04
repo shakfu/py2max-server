@@ -30,6 +30,35 @@ class InteractiveEditor {
         this.initializeWebSocket();
         this.initializeSVG();
         this.initializeControls();
+        this.initializeHeaderHeightSync();
+    }
+
+    initializeHeaderHeightSync() {
+        /**
+         * Keep the --header-height CSS variable in sync with the header's actual
+         * rendered height. The header wraps to multiple lines at narrow widths,
+         * so a fixed height would let the fixed-position sidebar overlap it (and
+         * mis-size the canvas). ResizeObserver re-measures on any header reflow.
+         */
+        const header = document.getElementById('header');
+        if (!header) return;
+
+        const sync = () => {
+            const height = header.offsetHeight;
+            if (height > 0) {
+                document.documentElement.style.setProperty(
+                    '--header-height', `${height}px`
+                );
+            }
+        };
+
+        sync();
+
+        if (typeof ResizeObserver !== 'undefined') {
+            this._headerResizeObserver = new ResizeObserver(sync);
+            this._headerResizeObserver.observe(header);
+        }
+        window.addEventListener('resize', sync);
     }
 
     initializeWebSocket() {

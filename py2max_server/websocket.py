@@ -322,7 +322,7 @@ class InteractiveHTTPHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         """Handle GET requests."""
-        if self.path == "/" or self.path == "/index.html":
+        if self.path == "/":
             self.serve_interactive_html()
         else:
             super().do_GET()

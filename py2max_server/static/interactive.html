@@ -31,7 +31,24 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
-            min-height: var(--header-height);
+            /* Literal min-height so the measured height feeds --header-height
+               without a feedback loop; JS keeps --header-height in sync with the
+               header's true (wrapped) height so the sidebar never overlaps it. */
+            min-height: 44px;
+            position: relative;
+            z-index: 200;
+            gap: 16px;
+        }
+
+        /* Thin, single-row header: title and breadcrumb sit inline and ellipsize
+           rather than wrapping, so the header height stays fixed. */
+        #header-title {
+            display: flex;
+            align-items: baseline;
+            gap: 12px;
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
         }
 
         h1 {
@@ -39,12 +56,43 @@
             font-weight: 600;
             color: #4080ff;
             letter-spacing: 0.5px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            min-width: 0;
+        }
+
+        #breadcrumb {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            font-size: 12px;
+            color: #888;
+            min-width: 0;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+
+        #breadcrumb-path {
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .breadcrumb-icon {
+            color: #4080ff;
+            flex-shrink: 0;
         }
 
         #controls {
             display: flex;
             gap: 10px;
             align-items: center;
+            flex-wrap: nowrap;
+            flex-shrink: 0;
+        }
+
+        #controls button {
+            white-space: nowrap;
         }
 
         button {
@@ -251,18 +299,20 @@
             position: fixed;
             top: var(--header-height);
             right: -280px;
-            bottom: 0;
             width: 280px;
             height: auto;
+            /* Size to content, but never taller than the viewport (scroll if so). */
+            max-height: calc(100vh - var(--header-height));
             flex-direction: column;
+            flex-wrap: nowrap;
             overflow-y: auto;
             border-bottom: none;
             border-left: 2px solid #4080ff;
             box-shadow: -2px 0 8px rgba(0,0,0,0.3);
             z-index: 100;
             transition: right 0.3s ease;
-            padding: 12px 20px;
-            gap: 20px;
+            padding: 10px 16px;
+            gap: 10px;
         }
 
         body.sidebar-mode #layout-controls.visible {
@@ -284,7 +334,12 @@
 
         body.sidebar-mode #layout-controls button {
             width: 100%;
-            margin-top: 0;
+            margin-top: 0 !important;
+        }
+
+        /* Small deliberate separator between the parameters and the action buttons. */
+        body.sidebar-mode #layout-controls #apply-layout-btn {
+            margin-top: 6px !important;
         }
 
         /* Collapsed sidebar indicator */
@@ -307,7 +362,7 @@
         .control-group {
             display: flex;
             flex-direction: column;
-            gap: 4px;
+            gap: 2px;
         }
 
         .control-group label {
@@ -435,15 +490,14 @@
 </head>
 <body class="layout-engine-cola" data-layout-engine="cola">
     <div id="header">
-        <div style="display: flex; flex-direction: column; gap: 8px; flex: 1;">
+        <div id="header-title">
             <h1 id="title">py2max Interactive Editor</h1>
-            <div id="breadcrumb" style="display: flex; gap: 8px; align-items: center; font-size: 12px; color: #888;">
-                <span style="color: #4080ff;">📁</span>
+            <div id="breadcrumb">
+                <span class="breadcrumb-icon">📁</span>
                 <span id="breadcrumb-path">Loading...</span>
             </div>
         </div>
         <div id="controls">
-            <span class="help-text">Click to select | Delete/Backspace to remove | Double-click on patcher to open</span>
             <button id="toggle-layout-mode-btn" title="Toggle between panel and sidebar layout">📋 Panel Mode</button>
             <button id="parent-btn" title="Go to parent patcher (ESC)">⬆️ Parent</button>
             <button id="auto-layout-btn" title="Auto-arrange objects using force-directed layout">🔄 Auto-Layout</button>
