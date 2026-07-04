@@ -5,6 +5,8 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+REVIEW.md
+
 .*_cache
 outputs/
 

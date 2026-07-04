@@ -11,7 +11,7 @@ Modules:
 - rpc: Remote procedure call server for REPL
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 from .websocket import (
     InteractivePatcherServer,

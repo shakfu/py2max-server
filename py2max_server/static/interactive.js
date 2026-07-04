@@ -27,6 +27,10 @@ class InteractiveEditor {
         // Current filepath (for save/save-as logic)
         this.currentFilepath = null;
 
+        // Whether to hide comment annotation nodes (they clutter auto-layout).
+        // Non-destructive: comments stay in the patch and are still saved.
+        this.hideComments = localStorage.getItem('hideComments') === 'true';
+
         this.initializeWebSocket();
         this.initializeSVG();
         this.initializeControls();
@@ -167,10 +171,10 @@ class InteractiveEditor {
         this.svg.addEventListener('mousedown', this.handleCanvasMouseDown.bind(this));
         this.svg.addEventListener('mousemove', this.handleCanvasMouseMove.bind(this));
         this.svg.addEventListener('mouseup', this.handleCanvasMouseUp.bind(this));
+        // Double-click on empty canvas creates an object. Box double-clicks
+        // (open subpatcher / edit text) are detected in handleBoxMouseDown,
+        // because re-rendering on mousedown makes the native dblclick unreliable.
         this.svg.addEventListener('dblclick', this.handleCanvasDoubleClick.bind(this));
-
-        // Use event delegation for box double-clicks (since boxes are recreated on render)
-        this.boxesGroup.addEventListener('dblclick', this.handleBoxesGroupDoubleClick.bind(this));
 
         console.log('SVG.js initialized:', SVG);
     }
@@ -219,6 +223,18 @@ class InteractiveEditor {
         if (createBtn) {
             createBtn.addEventListener('click', () => {
                 this.createObjectDialog();
+            });
+        }
+
+        // Hide/Show comments toggle
+        const toggleCommentsBtn = document.getElementById('toggle-comments-btn');
+        if (toggleCommentsBtn) {
+            this.updateCommentsButton();
+            toggleCommentsBtn.addEventListener('click', () => {
+                this.hideComments = !this.hideComments;
+                localStorage.setItem('hideComments', String(this.hideComments));
+                this.updateCommentsButton();
+                this.render();
             });
         }
 
@@ -282,6 +298,19 @@ class InteractiveEditor {
         const infoText = document.getElementById('info-text');
         if (infoText) {
             infoText.textContent = text;
+        }
+    }
+
+    isHidden(box) {
+        /** A box is hidden if it is a comment and comment-hiding is enabled. */
+        return this.hideComments && !!box && box.maxclass === 'comment';
+    }
+
+    updateCommentsButton() {
+        const btn = document.getElementById('toggle-comments-btn');
+        if (btn) {
+            btn.textContent = this.hideComments ? 'Show Comments' : 'Hide Comments';
+            btn.classList.toggle('active', this.hideComments);
         }
     }
 
@@ -371,6 +400,9 @@ class InteractiveEditor {
         } else if (data.type === 'save_as_required') {
             // No filepath set - show save dialog
             this.showSaveAsDialog();
+        } else if (data.type === 'patch_content') {
+            // Serialized patch returned for a client-side Save As.
+            this.writePatchToFile(data.content);
         } else if (data.type === 'save_error') {
             this.updateInfo(`Save error: ${data.message}`);
             console.error('Save error:', data.message);
@@ -400,7 +432,7 @@ class InteractiveEditor {
             const srcBox = this.boxes.get(line.src);
             const dstBox = this.boxes.get(line.dst);
 
-            if (srcBox && dstBox) {
+            if (srcBox && dstBox && !this.isHidden(srcBox) && !this.isHidden(dstBox)) {
                 const lineGroup = this.createLine(srcBox, dstBox, line);
 
                 // Highlight if selected
@@ -420,6 +452,8 @@ class InteractiveEditor {
 
         // Render boxes
         this.boxes.forEach(box => {
+            if (this.isHidden(box)) return;
+
             const boxGroup = this.createBox(box);
 
             // Highlight if selected
@@ -722,6 +756,8 @@ class InteractiveEditor {
         let maxX = -Infinity, maxY = -Infinity;
 
         this.boxes.forEach(box => {
+            if (this.isHidden(box)) return;  // don't let hidden comments drive the fit
+
             const x = box.x || 0;
             const y = box.y || 0;
             const w = box.width || 60;
@@ -732,6 +768,12 @@ class InteractiveEditor {
             maxX = Math.max(maxX, x + w);
             maxY = Math.max(maxY, y + h);
         });
+
+        // Nothing visible (e.g. a patch of only comments, all hidden).
+        if (maxX === -Infinity) {
+            this.svg.setAttribute('viewBox', '0 0 1200 800');
+            return;
+        }
 
         // Calculate content dimensions
         const contentWidth = maxX - minX;
@@ -795,8 +837,28 @@ class InteractiveEditor {
         // Stop propagation for ALL boxes to prevent canvas handler from running
         event.stopPropagation();
 
+        // Manual double-click detection. handleBoxMouseDown re-renders (rebuilding
+        // the box DOM) on every press, which makes the native dblclick event
+        // unreliable, so detect it here instead: two presses on the same box in
+        // quick succession -> open subpatcher, or edit the object's text.
+        const now = performance.now();
+        if (this._lastBoxClick &&
+            this._lastBoxClick.id === box.id &&
+            (now - this._lastBoxClick.time) < 350) {
+            this._lastBoxClick = null;
+            this.dragging = false;
+            this.dragStarted = false;
+            event.preventDefault();
+            if (box.has_subpatcher) {
+                this.navigateToSubpatcher(box.id);
+            } else {
+                this.startTextEdit(box, event.currentTarget);
+            }
+            return;
+        }
+        this._lastBoxClick = { id: box.id, time: now };
+
         // Enable dragging for all boxes (including subpatchers)
-        // Double-click still works via event delegation
         this.dragging = true;
         this.dragStarted = false;  // Not started until movement
 
@@ -925,6 +987,11 @@ class InteractiveEditor {
     }
 
     handleCanvasDoubleClick(event) {
+        // Only create an object when double-clicking empty canvas; box
+        // double-clicks are handled in handleBoxMouseDown.
+        if (event.target.closest && event.target.closest('.box')) {
+            return;
+        }
         const svgPoint = this.getSVGPoint(event);
         this.createObjectDialog(svgPoint.x, svgPoint.y);
     }
@@ -1033,12 +1100,73 @@ class InteractiveEditor {
             const boxId = boxElement.getAttribute('data-id');
             const box = this.boxes.get(boxId);
 
-            if (box && box.has_subpatcher) {
+            if (box) {
                 event.stopPropagation();
                 event.preventDefault();
-                this.navigateToSubpatcher(box.id);
+                if (box.has_subpatcher) {
+                    this.navigateToSubpatcher(box.id);
+                } else {
+                    // Double-click a plain object to edit its text in place.
+                    this.startTextEdit(box, boxElement);
+                }
             }
         }
+    }
+
+    startTextEdit(box, boxElement) {
+        /**
+         * Overlay an <input> on the box to edit its text. Commits on Enter/blur,
+         * cancels on Escape. Sends edit_object_text to the server on commit.
+         */
+        if (!boxElement) {
+            boxElement = this.boxesGroup.querySelector(`[data-id="${box.id}"]`);
+        }
+        if (!boxElement) return;
+
+        const rect = boxElement.getBoundingClientRect();
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'inline-edit';
+        input.value = box.text || '';
+        input.style.left = `${rect.left}px`;
+        input.style.top = `${rect.top}px`;
+        input.style.width = `${Math.max(rect.width, 80)}px`;
+        input.style.height = `${rect.height}px`;
+        document.body.appendChild(input);
+        input.focus();
+        input.select();
+
+        let done = false;
+        const finish = (save) => {
+            if (done) return;
+            done = true;
+            const newText = input.value;
+            input.remove();
+            if (save && newText !== (box.text || '')) {
+                this.sendMessage({
+                    type: 'edit_object_text',
+                    box_id: box.id,
+                    text: newText
+                });
+                this.updateInfo(`Edited "${box.text || box.id}" -> "${newText}"`);
+            } else {
+                this.updateInfo('Edit cancelled');
+            }
+        };
+
+        input.addEventListener('keydown', (e) => {
+            // Keep global handlers (Delete/Backspace/Escape) from firing while typing.
+            e.stopPropagation();
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                finish(true);
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                finish(false);
+            }
+        });
+        input.addEventListener('blur', () => finish(true));
     }
 
     navigateToSubpatcher(boxId) {
@@ -1371,7 +1499,7 @@ class InteractiveEditor {
         }
 
         // Check which layout engine is selected
-        const layoutEngine = document.getElementById('layout-engine')?.value || 'cola';
+        const layoutEngine = document.getElementById('layout-engine')?.value || 'elk';
 
         if (layoutEngine === 'elk') {
             this.elkAutoLayout();
@@ -1393,11 +1521,13 @@ class InteractiveEditor {
         // Get parameters from controls
         const linkDistance = parseInt(document.getElementById('link-distance-slider')?.value || 100);
         const iterations = parseInt(document.getElementById('iterations-slider')?.value || 50);
-        const canvasWidth = parseInt(document.getElementById('canvas-width-slider')?.value || 400);
-        const canvasHeight = parseInt(document.getElementById('canvas-height-slider')?.value || 300);
+        // Canvas scales with object count so large patches aren't crammed.
+        const canvasSize = this.getLayoutCanvasSize();
+        const canvasWidth = canvasSize.width;
+        const canvasHeight = canvasSize.height;
         const avoidOverlaps = document.getElementById('avoid-overlaps-checkbox')?.checked !== false;
         const constraintPreset = document.getElementById('constraint-preset')?.value || 'none';
-        const flowDirection = document.getElementById('flow-direction')?.value || 'none';
+        const flowDirection = document.getElementById('flow-direction')?.value || 'y';
         const flowSpacing = parseInt(document.getElementById('flow-spacing-slider')?.value || 50);
 
         // Use sensible default for convergence threshold (not exposed in UI)
@@ -1413,6 +1543,7 @@ class InteractiveEditor {
         // Create nodes array
         let index = 0;
         this.boxes.forEach((box, boxId) => {
+            if (this.isHidden(box)) return;  // exclude hidden comments from layout
             nodes.push({
                 id: boxId,
                 width: box.width || 60,
@@ -1648,7 +1779,7 @@ class InteractiveEditor {
         this.updateInfo('Computing ELK layout with ports...');
 
         // Get parameters from controls
-        const flowDirection = document.getElementById('flow-direction')?.value || 'none';
+        const flowDirection = document.getElementById('flow-direction')?.value || 'y';
         const flowSpacing = parseInt(document.getElementById('flow-spacing-slider')?.value || 50);
         const elkAlgorithm = document.getElementById('elk-algorithm')?.value || 'layered';
         const elkNodePlacement = document.getElementById('elk-node-placement')?.value || 'NETWORK_SIMPLEX';
@@ -1678,6 +1809,10 @@ class InteractiveEditor {
             if (!this.boxes.has(line.src) || !this.boxes.has(line.dst)) {
                 return;
             }
+            // Skip connections touching a hidden comment.
+            if (this.isHidden(this.boxes.get(line.src)) || this.isHidden(this.boxes.get(line.dst))) {
+                return;
+            }
 
             const srcOutlet = line.src_outlet || 0;
             const dstInlet = line.dst_inlet || 0;
@@ -1691,6 +1826,8 @@ class InteractiveEditor {
 
         // Create nodes with ports
         this.boxes.forEach((box, boxId) => {
+            if (this.isHidden(box)) return;  // exclude hidden comments from layout
+
             const width = box.width || 60;
             const height = box.height || 22;
 
@@ -1744,6 +1881,10 @@ class InteractiveEditor {
             // Skip edges where source or destination box doesn't exist
             if (!this.boxes.has(line.src) || !this.boxes.has(line.dst)) {
                 console.warn(`Skipping edge: source ${line.src} or destination ${line.dst} not found`);
+                return;
+            }
+            // Skip edges touching a hidden comment (its node isn't in the graph).
+            if (this.isHidden(this.boxes.get(line.src)) || this.isHidden(this.boxes.get(line.dst))) {
                 return;
             }
 
@@ -1873,7 +2014,7 @@ class InteractiveEditor {
         this.updateInfo('Computing Dagre layout...');
 
         // Get parameters from controls
-        const flowDirection = document.getElementById('flow-direction')?.value || 'none';
+        const flowDirection = document.getElementById('flow-direction')?.value || 'y';
         const flowSpacing = parseInt(document.getElementById('flow-spacing-slider')?.value || 50);
         const dagreRanker = document.getElementById('dagre-ranker')?.value || 'network-simplex';
         const dagreAlign = document.getElementById('dagre-align')?.value || '';
@@ -1912,6 +2053,8 @@ class InteractiveEditor {
 
         // Add nodes
         this.boxes.forEach((box, boxId) => {
+            if (this.isHidden(box)) return;  // exclude hidden comments from layout
+
             const width = box.width || 60;
             const height = box.height || 22;
 
@@ -1926,6 +2069,10 @@ class InteractiveEditor {
         this.lines.forEach(line => {
             if (!this.boxes.has(line.src) || !this.boxes.has(line.dst)) {
                 console.warn(`Skipping edge: source ${line.src} or destination ${line.dst} not found`);
+                return;
+            }
+            // Skip edges touching a hidden comment (its node isn't in the graph).
+            if (this.isHidden(this.boxes.get(line.src)) || this.isHidden(this.boxes.get(line.dst))) {
                 return;
             }
             g.setEdge(line.src, line.dst);
@@ -2016,6 +2163,41 @@ class InteractiveEditor {
 
     // Helper methods
 
+    getLayoutCanvasSize() {
+        /**
+         * Canvas dimensions for layout/centering, scaled to the object count.
+         * The compact slider defaults suit small patches, but a fixed small
+         * canvas crams a large patch (force-directed especially) into a blob.
+         * Returns at least the slider values, growing with node count so complex
+         * patches get room to breathe.
+         */
+        const sliderW = parseInt(document.getElementById('canvas-width-slider')?.value || 400);
+        const sliderH = parseInt(document.getElementById('canvas-height-slider')?.value || 300);
+        const spacing = parseInt(document.getElementById('flow-spacing-slider')?.value || 50);
+
+        // Average footprint over the boxes that actually get laid out.
+        let n = 0, avgW = 0, avgH = 0;
+        this.boxes.forEach(b => {
+            if (this.isHidden(b)) return;
+            n += 1;
+            avgW += (b.width || 60);
+            avgH += (b.height || 22);
+        });
+        if (n === 0) { n = 1; avgW = 60; avgH = 22; }
+        avgW = avgW / n;
+        avgH = avgH / n;
+
+        // Room for ~sqrt(n) nodes per side, each plus spacing between them.
+        const perSide = Math.ceil(Math.sqrt(n));
+        const needW = Math.round(perSide * (avgW + spacing));
+        const needH = Math.round(perSide * (avgH + spacing));
+
+        return {
+            width: Math.max(sliderW, needW),
+            height: Math.max(sliderH, needH)
+        };
+    }
+
     centerLayout() {
         /**
          * Center all boxes within the canvas.
@@ -2023,15 +2205,18 @@ class InteractiveEditor {
          */
         if (this.boxes.size === 0) return;
 
-        // Get canvas dimensions
-        const canvasWidth = parseInt(document.getElementById('canvas-width-slider')?.value || 400);
-        const canvasHeight = parseInt(document.getElementById('canvas-height-slider')?.value || 300);
+        // Canvas dimensions, scaled to the object count (see getLayoutCanvasSize).
+        const canvasSize = this.getLayoutCanvasSize();
+        const canvasWidth = canvasSize.width;
+        const canvasHeight = canvasSize.height;
 
         // Calculate bounding box of all objects
         let minX = Infinity, minY = Infinity;
         let maxX = -Infinity, maxY = -Infinity;
 
         this.boxes.forEach(box => {
+            if (this.isHidden(box)) return;  // center on the visible (laid-out) objects
+
             const x = box.x || 0;
             const y = box.y || 0;
             const w = box.width || 60;
@@ -2042,6 +2227,8 @@ class InteractiveEditor {
             maxX = Math.max(maxX, x + w);
             maxY = Math.max(maxY, y + h);
         });
+
+        if (maxX === -Infinity) return;  // nothing visible to center
 
         // Calculate content dimensions
         const contentWidth = maxX - minX;
@@ -2173,33 +2360,89 @@ class InteractiveEditor {
         }
     }
 
-    showSaveAsDialog() {
-        /**
-         * Show a save-as dialog to get a filepath from the user.
-         * Uses a simple prompt for now - could be enhanced with a modal dialog.
-         */
-        // Get suggested filename from patcher title
-        const titleEl = document.getElementById('title');
-        const title = titleEl?.textContent?.replace('py2max Interactive Editor - ', '') || 'untitled';
-        const suggestedName = title.endsWith('.maxpat') ? title : `${title}.maxpat`;
-
-        const filepath = prompt('Save patch as:', suggestedName);
-
-        if (filepath) {
-            // Send save_as message to server
-            this.sendMessage({
-                type: 'save_as',
-                filepath: filepath.trim()
-            });
-            this.updateInfo(`Saving as ${filepath}...`);
-        } else {
-            this.updateInfo('Save cancelled');
+    suggestedFilename() {
+        /** Best-effort .maxpat filename from the current file path or title. */
+        if (this.currentFilepath) {
+            const base = this.currentFilepath.split(/[\\/]/).pop();
+            if (base) return base;
         }
+        const titleEl = document.getElementById('title');
+        const title = (titleEl?.textContent || '')
+            .replace('py2max Interactive Editor - ', '')
+            .trim() || 'patch';
+        return title.endsWith('.maxpat') ? title : `${title}.maxpat`;
     }
 
-    handleSave() {
-        this.sendMessage({ type: 'save' });
+    async handleSave() {
+        /**
+         * Save As via a native file dialog. The server writes to its own disk by
+         * path, which a browser can't choose, so Save As serializes the patch and
+         * lets the browser write it: the File System Access API (Chrome) shows the
+         * real OS save dialog; other browsers fall back to a download.
+         *
+         * The save-file picker must run inside the click gesture, so acquire the
+         * file handle now and write to it once the server returns the content.
+         */
+        this._saveHandle = null;
+        if (window.showSaveFilePicker) {
+            try {
+                this._saveHandle = await window.showSaveFilePicker({
+                    suggestedName: this.suggestedFilename(),
+                    types: [{
+                        description: 'Max patch',
+                        accept: { 'application/json': ['.maxpat'] }
+                    }]
+                });
+            } catch (err) {
+                if (err && err.name === 'AbortError') {
+                    this.updateInfo('Save cancelled');
+                    return;
+                }
+                // Picker unavailable/failed: fall back to a plain download.
+                this._saveHandle = null;
+            }
+        }
+
+        this._saveFilename = this._saveHandle ? this._saveHandle.name : this.suggestedFilename();
+        this.sendMessage({ type: 'export_patch' });
         this.updateInfo('Saving...');
+    }
+
+    async writePatchToFile(content) {
+        /** Write serialized patch content returned by the server (see handleSave). */
+        const handle = this._saveHandle;
+        this._saveHandle = null;
+
+        if (handle) {
+            try {
+                const writable = await handle.createWritable();
+                await writable.write(content);
+                await writable.close();
+                this.updateInfo(`Saved ${handle.name}`);
+                return;
+            } catch (err) {
+                console.error('Write failed, falling back to download:', err);
+            }
+        }
+
+        // Fallback: trigger a browser download.
+        const filename = this._saveFilename || 'patch.maxpat';
+        const blob = new Blob([content], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        this.updateInfo(`Downloaded ${filename}`);
+    }
+
+    showSaveAsDialog() {
+        // Retained for the server's save_as_required flow: route it through the
+        // same native Save As path rather than a text prompt.
+        this.handleSave();
     }
 
     sendMessage(message) {

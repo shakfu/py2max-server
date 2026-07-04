@@ -7,7 +7,7 @@ authors = [
 maintainers = [
     { name = "Shakeeb Alireza", email = "shakfu@users.noreply.github.com" }
 ]
-version = "0.1.0"
+version = "0.1.1"
 readme = "README.md"
 requires-python = ">=3.9"
 keywords = ["Max", "maxpat", "py2max", "websocket", "repl"]

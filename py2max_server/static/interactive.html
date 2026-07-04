@@ -231,6 +231,21 @@
             font-weight: bold;
         }
 
+        /* Overlay input for editing an object's text in place (double-click). */
+        .inline-edit {
+            position: fixed;
+            font-family: Monaco, Courier, monospace;
+            font-size: 11px;
+            padding: 2px 4px;
+            border: 2px solid #4080ff;
+            border-radius: 3px;
+            background: #fff;
+            color: #000;
+            box-sizing: border-box;
+            outline: none;
+            z-index: 300;
+        }
+
         /* Disable box hover when hovering over ports - ports have their own hover */
         .box:has(.port:hover) rect {
             stroke: #000;
@@ -540,7 +555,7 @@
         }
     </style>
 </head>
-<body class="layout-engine-cola" data-layout-engine="cola">
+<body class="layout-engine-elk" data-layout-engine="elk">
     <div id="header">
         <div id="header-title">
             <h1 id="title">py2max Interactive Editor</h1>
@@ -552,7 +567,8 @@
         <div id="controls">
             <button id="toggle-layout-mode-btn" title="Toggle between panel and sidebar layout">📋 Panel Mode</button>
             <button id="parent-btn" title="Go to parent patcher (ESC)">⬆️ Parent</button>
-            <button id="auto-layout-btn" title="Auto-arrange objects using force-directed layout">🔄 Auto-Layout</button>
+            <button id="auto-layout-btn" title="Auto-arrange objects (layout engine is configurable)">🔄 Auto-Layout</button>
+            <button id="toggle-comments-btn" title="Hide/show comment annotation nodes (does not delete them)">Hide Comments</button>
             <label id="open-btn" for="file-input" title="Open a .maxpat file from disk">📂 Open</label>
             <button id="save-btn" title="Save patch to .maxpat file">💾 Save</button>
             <button id="create-btn" title="Create new object">+ Object</button>
@@ -568,7 +584,7 @@
             <label>Layout Engine</label>
             <select id="layout-engine" style="padding: 4px 8px; background: #444; color: #fff; border: 1px solid #666; border-radius: 3px; cursor: pointer;">
                 <option value="cola">WebCola (Force-Directed)</option>
-                <option value="elk">ELK (Layered + Ports)</option>
+                <option value="elk" selected>ELK (Layered + Ports)</option>
                 <option value="dagre">Dagre (Hierarchical DAG)</option>
             </select>
         </div>
@@ -578,7 +594,7 @@
                 <option value="none">None</option>
                 <option value="x">Horizontal (Left-to-Right)</option>
                 <option value="x-reverse">Horizontal (Right-to-Left)</option>
-                <option value="y">Vertical (Top-to-Bottom)</option>
+                <option value="y" selected>Vertical (Top-to-Bottom)</option>
                 <option value="y-reverse">Vertical (Bottom-to-Top)</option>
             </select>
         </div>

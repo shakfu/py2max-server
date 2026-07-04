@@ -336,3 +336,72 @@ class TestWebSocketHandler:
         ok, err = validate_message({"type": "open_content", "filename": "a.maxpat"})
         assert not ok
         assert "content" in err
+
+    @pytest.mark.asyncio
+    async def test_handle_edit_object_text(self):
+        """Editing an object's text updates it and broadcasts new state."""
+        from py2max_server import InteractiveWebSocketHandler
+
+        p = Patcher("test.maxpat")
+        box = p.add_textbox("cycle~ 440")
+
+        handler = InteractiveWebSocketHandler(p)
+
+        sent = []
+
+        async def capture(msg):
+            sent.append(msg)
+
+        handler.broadcast = capture
+
+        await handler.handle_edit_object_text({"box_id": box.id, "text": "cycle~ 880"})
+
+        assert box.text == "cycle~ 880"
+        assert any(m.get("type") == "update" for m in sent)
+
+    def test_edit_object_text_validates(self):
+        """The 'edit_object_text' message requires box_id and text strings."""
+        from py2max_server.websocket import validate_message
+
+        ok, _ = validate_message(
+            {"type": "edit_object_text", "box_id": "obj-1", "text": "gate 3"}
+        )
+        assert ok
+
+        ok, err = validate_message({"type": "edit_object_text", "box_id": "obj-1"})
+        assert not ok
+        assert "text" in err
+
+    @pytest.mark.asyncio
+    async def test_handle_export_patch(self):
+        """Exporting sends serialized .maxpat text back to the requesting client."""
+        import json
+
+        from py2max_server import InteractiveWebSocketHandler
+
+        p = Patcher("test.maxpat")
+        p.add_textbox("cycle~ 440")
+
+        handler = InteractiveWebSocketHandler(p)
+
+        # Capture the direct (per-connection) reply.
+        sent = []
+
+        class FakeWS:
+            async def send(self, msg):
+                sent.append(json.loads(msg))
+
+        await handler.handle_export_patch(FakeWS())
+
+        assert len(sent) == 1
+        assert sent[0]["type"] == "patch_content"
+        assert sent[0]["filename"].endswith(".maxpat")
+        # Content is a full .maxpat wrapper.
+        assert "patcher" in json.loads(sent[0]["content"])
+
+    def test_export_patch_validates(self):
+        """The 'export_patch' message needs no fields."""
+        from py2max_server.websocket import validate_message
+
+        ok, _ = validate_message({"type": "export_patch"})
+        assert ok

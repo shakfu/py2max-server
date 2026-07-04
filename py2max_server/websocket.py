@@ -59,6 +59,8 @@ MESSAGE_SCHEMAS: dict[str, dict[str, type | tuple[type, ...]]] = {
     "save_as": {"filepath": str},
     "open": {"filepath": str},  # Open a file by server-side path
     "open_content": {"filename": str, "content": str},  # Open uploaded file text
+    "export_patch": {},  # Request serialized patch text for client-side Save As
+    "edit_object_text": {"box_id": str, "text": str},  # Rename/edit an object
     "navigate_to_subpatcher": {"box_id": str},
     "navigate_to_parent": {},
     "navigate_to_root": {},
@@ -563,6 +565,10 @@ class InteractiveWebSocketHandler:
                 await self.handle_open(data)
             elif message_type == "open_content":
                 await self.handle_open_content(data)
+            elif message_type == "export_patch":
+                await self.handle_export_patch(websocket)
+            elif message_type == "edit_object_text":
+                await self.handle_edit_object_text(data)
             elif message_type == "navigate_to_subpatcher":
                 await self.handle_navigate_to_subpatcher(data)
             elif message_type == "navigate_to_parent":
@@ -917,6 +923,68 @@ class InteractiveWebSocketHandler:
 
         state = get_patcher_state_json(self.patcher)
         await self.broadcast(state)
+
+    async def handle_export_patch(self, websocket: ServerConnection):
+        """Serialize the patch and send its text to the requesting client.
+
+        Used for a browser-side "Save As" (the browser writes the file via a
+        native dialog); the browser cannot pass a server path for an in-place save.
+        """
+        if not self.root_patcher:
+            return
+
+        try:
+            content = self.root_patcher.to_json()
+
+            # Suggest a filename from the current path or title.
+            filename = "patch.maxpat"
+            path = getattr(self.root_patcher, "_path", None) or getattr(
+                self.root_patcher, "filepath", None
+            )
+            if path:
+                filename = Path(str(path)).name
+            else:
+                title = getattr(self.root_patcher, "title", None)
+                if title:
+                    filename = f"{title}.maxpat"
+
+            await websocket.send(
+                json.dumps(
+                    {
+                        "type": "patch_content",
+                        "filename": filename,
+                        "content": content,
+                    }
+                )
+            )
+        except Exception as e:
+            print(f"Error exporting patch: {e}")
+            await websocket.send(
+                json.dumps({"type": "save_error", "message": str(e)})
+            )
+
+    async def handle_edit_object_text(self, data: dict):
+        """Update the text of an existing object (rename/edit in place)."""
+        if not self.patcher:
+            return
+
+        box_id = data.get("box_id")
+        text = data.get("text", "")
+
+        for box in self.patcher._boxes:
+            if box.id == box_id:
+                # Box.text is a read-only property backed by __dict__["text"]
+                # (file-loaded) or _kwds["text"] (programmatic). Update both so
+                # the getter and serialization agree.
+                box.__dict__["text"] = text
+                kwds = getattr(box, "_kwds", None)
+                if isinstance(kwds, dict):
+                    kwds["text"] = text
+                # Broadcast the new state to all clients.
+                state = get_patcher_state_json(self.patcher)
+                await self.broadcast(state)
+                await self.schedule_save()
+                break
 
     async def handle_navigate_to_subpatcher(self, data: dict):
         """Handle navigation to a subpatcher."""
