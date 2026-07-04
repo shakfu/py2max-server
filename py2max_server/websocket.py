@@ -959,9 +959,7 @@ class InteractiveWebSocketHandler:
             )
         except Exception as e:
             print(f"Error exporting patch: {e}")
-            await websocket.send(
-                json.dumps({"type": "save_error", "message": str(e)})
-            )
+            await websocket.send(json.dumps({"type": "save_error", "message": str(e)}))
 
     async def handle_edit_object_text(self, data: dict):
         """Update the text of an existing object (rename/edit in place)."""
