@@ -57,6 +57,8 @@ MESSAGE_SCHEMAS: dict[str, dict[str, type | tuple[type, ...]]] = {
     "delete_connection": {"src_id": str, "dst_id": str},
     "save": {},  # No required fields
     "save_as": {"filepath": str},
+    "open": {"filepath": str},  # Open a file by server-side path
+    "open_content": {"filename": str, "content": str},  # Open uploaded file text
     "navigate_to_subpatcher": {"box_id": str},
     "navigate_to_parent": {},
     "navigate_to_root": {},
@@ -69,7 +71,11 @@ MAX_STRING_LENGTHS: dict[str, int] = {
     "dst_id": 256,
     "text": 10000,  # Max object text length
     "filepath": 4096,  # Max filepath length
+    "filename": 4096,  # Max uploaded filename length
 }
+
+# Maximum size for an uploaded patch payload (bytes/chars of JSON text).
+MAX_CONTENT_LENGTH = 16 * 1024 * 1024
 
 # Coordinate bounds
 COORDINATE_BOUNDS = {"min": -100000, "max": 100000}
@@ -79,6 +85,32 @@ class ValidationError(Exception):
     """Raised when message validation fails."""
 
     pass
+
+
+def _coerce_patcher_rect(patcher: Any) -> None:
+    """Normalize a list/tuple patcher rect into a Rect (mirrors CLI loading)."""
+    rect = getattr(patcher, "rect", None)
+    if isinstance(rect, (list, tuple)) and len(rect) == 4:
+        from py2max.core.common import Rect
+
+        patcher.rect = Rect(*rect)
+
+
+# Browsers to try, in order, before falling back to the OS default. Chrome is
+# preferred: the editor's Open (file-upload) flow is unreliable in Safari.
+_PREFERRED_BROWSERS = ("chrome", "google-chrome", "chromium")
+
+
+def _open_in_browser(url: str) -> None:
+    """Open ``url`` in a preferred browser, falling back to the OS default."""
+    for name in _PREFERRED_BROWSERS:
+        try:
+            webbrowser.get(name).open(url)
+            print(f"Opened in {name}")
+            return
+        except webbrowser.Error:
+            continue
+    webbrowser.open(url)
 
 
 def validate_message(data: dict) -> tuple[bool, Optional[str]]:
@@ -173,6 +205,16 @@ def validate_message(data: dict) -> tuple[bool, Optional[str]]:
                     return False, f"Optional field '{field}' must be an integer"
                 if value < 0 or value > 255:
                     return False, f"Optional field '{field}' out of range (0-255)"
+
+    if message_type == "open_content":
+        # Length-check the payload here rather than via MAX_STRING_LENGTHS so we
+        # skip the expensive per-character control-char scan on a large upload.
+        content = data.get("content", "")
+        if len(content) > MAX_CONTENT_LENGTH:
+            return (
+                False,
+                f"Field 'content' exceeds max length ({MAX_CONTENT_LENGTH})",
+            )
 
     return True, None
 
@@ -326,6 +368,18 @@ class InteractiveHTTPHandler(http.server.SimpleHTTPRequestHandler):
             self.serve_interactive_html()
         else:
             super().do_GET()
+
+    def end_headers(self):
+        """Disable caching of editor assets.
+
+        The editor is a live dev tool served from disk; browsers (Safari in
+        particular) otherwise cache interactive.js/.html heuristically and miss
+        code changes on reload. Force revalidation on every request.
+        """
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
 
     def serve_interactive_html(self):
         """Serve the interactive editor HTML with injected session token."""
@@ -505,6 +559,10 @@ class InteractiveWebSocketHandler:
                 await self.handle_save()
             elif message_type == "save_as":
                 await self.handle_save_as(data)
+            elif message_type == "open":
+                await self.handle_open(data)
+            elif message_type == "open_content":
+                await self.handle_open_content(data)
             elif message_type == "navigate_to_subpatcher":
                 await self.handle_navigate_to_subpatcher(data)
             elif message_type == "navigate_to_parent":
@@ -784,6 +842,82 @@ class InteractiveWebSocketHandler:
             print(f"Error saving: {e}")
             await self.broadcast({"type": "save_error", "message": str(e)})
 
+    async def handle_open(self, data: dict):
+        """Handle a request to open a different patch file from disk.
+
+        Replaces the served patcher (both the root and the current view) with the
+        contents of the given file, then broadcasts the new state to all clients.
+        """
+        filepath = data.get("filepath", "").strip()
+        if not filepath:
+            await self.broadcast(
+                {"type": "open_error", "message": "No filepath provided"}
+            )
+            return
+
+        path = Path(filepath)
+        if not path.exists() or not path.is_file():
+            await self.broadcast(
+                {"type": "open_error", "message": f"File not found: {filepath}"}
+            )
+            return
+
+        try:
+            from py2max import Patcher
+
+            patcher = Patcher.from_file(path)
+            _coerce_patcher_rect(patcher)
+        except Exception as e:
+            print(f"Error opening {filepath}: {e}")
+            await self.broadcast(
+                {"type": "open_error", "message": f"Could not open: {e}"}
+            )
+            return
+
+        # Swap in the newly loaded patcher as both root and current view.
+        self.root_patcher = patcher
+        self.patcher = patcher
+        print(f"Opened: {filepath}")
+
+        state = get_patcher_state_json(self.patcher)
+        await self.broadcast(state)
+
+    async def handle_open_content(self, data: dict):
+        """Handle a patch opened from uploaded file contents (browser file picker).
+
+        The browser cannot pass a filesystem path, so it sends the chosen file's
+        text. A .maxpat is JSON, so we parse it and build a patcher from the
+        embedded "patcher" object, mirroring Patcher.from_file.
+        """
+        filename = (data.get("filename") or "untitled.maxpat").strip()
+        content = data.get("content", "")
+
+        try:
+            maxpat = json.loads(content)
+            if isinstance(maxpat, dict) and "patcher" in maxpat:
+                patcher_dict = maxpat["patcher"]
+            else:
+                patcher_dict = maxpat  # tolerate a bare patcher object
+
+            from py2max import Patcher
+
+            patcher = Patcher.from_dict(patcher_dict)
+            _coerce_patcher_rect(patcher)
+        except Exception as e:
+            print(f"Error opening {filename}: {e}")
+            await self.broadcast(
+                {"type": "open_error", "message": f"Could not open {filename}: {e}"}
+            )
+            return
+
+        # Swap in the newly loaded patcher as both root and current view.
+        self.root_patcher = patcher
+        self.patcher = patcher
+        print(f"Opened (uploaded): {filename}")
+
+        state = get_patcher_state_json(self.patcher)
+        await self.broadcast(state)
+
     async def handle_navigate_to_subpatcher(self, data: dict):
         """Handle navigation to a subpatcher."""
         if not self.patcher:
@@ -903,7 +1037,12 @@ class InteractivePatcherServer:
 
         # Start WebSocket server
         self.ws_server = await serve(
-            self.handler.handle_client, "localhost", self.ws_port
+            self.handler.handle_client,
+            "localhost",
+            self.ws_port,
+            # Allow larger frames so uploaded patches (open_content) aren't
+            # rejected by the 1 MB default.
+            max_size=MAX_CONTENT_LENGTH + 1024 * 1024,
         )
         self._running = True
 
@@ -914,7 +1053,7 @@ class InteractivePatcherServer:
         # Open browser
         if self.auto_open:
             await asyncio.sleep(0.5)  # Give server time to start
-            webbrowser.open(url)
+            _open_in_browser(url)
 
         return self
 

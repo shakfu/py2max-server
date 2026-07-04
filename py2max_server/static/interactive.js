@@ -198,6 +198,14 @@ class InteractiveEditor {
             });
         }
 
+        // Open control is a <label for="file-input">, so the native file dialog
+        // opens on click without a programmatic .click() (which Safari blocks).
+        // We only need to react once a file is chosen.
+        const fileInput = document.getElementById('file-input');
+        if (fileInput) {
+            fileInput.addEventListener('change', (e) => this.handleFileSelected(e));
+        }
+
         // Save button
         const saveBtn = document.getElementById('save-btn');
         if (saveBtn) {
@@ -366,6 +374,9 @@ class InteractiveEditor {
         } else if (data.type === 'save_error') {
             this.updateInfo(`Save error: ${data.message}`);
             console.error('Save error:', data.message);
+        } else if (data.type === 'open_error') {
+            this.updateInfo(`Open error: ${data.message}`);
+            console.error('Open error:', data.message);
         }
     }
 
@@ -373,6 +384,16 @@ class InteractiveEditor {
         // Clear SVG using SVG.js
         this.linesGroupSVG.clear();
         this.boxesGroupSVG.clear();
+
+        // Clear the <defs> too. createBox() adds a clipPath (id "clip-<boxId>")
+        // per box on every render; without clearing defs, re-rendering leaks
+        // duplicate ids and the browser resolves url(#clip-<id>) to the first,
+        // stale clip at the box's old position -- clipping the label out of view
+        // once a box moves. Clearing keeps clips fresh and correctly placed.
+        const defs = this.draw.defs();
+        if (defs) {
+            defs.clear();
+        }
 
         // Render patchlines first (behind boxes)
         this.lines.forEach(line => {
@@ -618,10 +639,13 @@ class InteractiveEditor {
             text.attr({ x: x + 5, y: y + (box.height || 22) / 2 + 4 });
         }
 
-        // Update clip path
-        const clipRect = svgBox.findOne('clipPath rect');
-        if (clipRect) {
-            clipRect.move(x, y);
+        // Update clip path. The clipPath lives in <defs> (not in the box group),
+        // so locate it by id; otherwise the label's clip stays at the old
+        // position and hides the text after a delta move.
+        const clipEl = this.svg.querySelector(`#clip-${boxId} rect`);
+        if (clipEl) {
+            clipEl.setAttribute('x', x);
+            clipEl.setAttribute('y', y);
         }
 
         // Update port positions
@@ -728,8 +752,8 @@ class InteractiveEditor {
 
         // Ensure minimum viewBox size to prevent cramped layouts
         // Read from sliders if available, otherwise use defaults
-        const minViewWidth = parseInt(document.getElementById('min-viewbox-width-slider')?.value || 800);
-        const minViewHeight = parseInt(document.getElementById('min-viewbox-height-slider')?.value || 600);
+        const minViewWidth = parseInt(document.getElementById('min-viewbox-width-slider')?.value || 400);
+        const minViewHeight = parseInt(document.getElementById('min-viewbox-height-slider')?.value || 300);
 
         let width = Math.max(maxX - minX, minViewWidth);
         let height = Math.max(maxY - minY, minViewHeight);
@@ -1130,6 +1154,17 @@ class InteractiveEditor {
                 this.resetLayout();
             });
         }
+
+        // Advanced disclosure - collapse the engine-internal parameters.
+        const advancedToggle = document.getElementById('advanced-toggle');
+        const advancedBody = document.getElementById('advanced-body');
+        if (advancedToggle && advancedBody) {
+            advancedToggle.addEventListener('click', () => {
+                const collapsed = advancedBody.classList.toggle('collapsed');
+                advancedToggle.textContent = collapsed ? '+ Advanced' : '- Advanced';
+                advancedToggle.setAttribute('aria-expanded', String(!collapsed));
+            });
+        }
     }
 
     reverseFlowLayout(nodes, axis, canvasWidth, canvasHeight) {
@@ -1358,12 +1393,12 @@ class InteractiveEditor {
         // Get parameters from controls
         const linkDistance = parseInt(document.getElementById('link-distance-slider')?.value || 100);
         const iterations = parseInt(document.getElementById('iterations-slider')?.value || 50);
-        const canvasWidth = parseInt(document.getElementById('canvas-width-slider')?.value || 800);
-        const canvasHeight = parseInt(document.getElementById('canvas-height-slider')?.value || 600);
+        const canvasWidth = parseInt(document.getElementById('canvas-width-slider')?.value || 400);
+        const canvasHeight = parseInt(document.getElementById('canvas-height-slider')?.value || 300);
         const avoidOverlaps = document.getElementById('avoid-overlaps-checkbox')?.checked !== false;
         const constraintPreset = document.getElementById('constraint-preset')?.value || 'none';
         const flowDirection = document.getElementById('flow-direction')?.value || 'none';
-        const flowSpacing = parseInt(document.getElementById('flow-spacing-slider')?.value || 150);
+        const flowSpacing = parseInt(document.getElementById('flow-spacing-slider')?.value || 50);
 
         // Use sensible default for convergence threshold (not exposed in UI)
         const convergenceThreshold = 1e-3;
@@ -1614,7 +1649,7 @@ class InteractiveEditor {
 
         // Get parameters from controls
         const flowDirection = document.getElementById('flow-direction')?.value || 'none';
-        const flowSpacing = parseInt(document.getElementById('flow-spacing-slider')?.value || 150);
+        const flowSpacing = parseInt(document.getElementById('flow-spacing-slider')?.value || 50);
         const elkAlgorithm = document.getElementById('elk-algorithm')?.value || 'layered';
         const elkNodePlacement = document.getElementById('elk-node-placement')?.value || 'NETWORK_SIMPLEX';
         const elkEdgeRouting = document.getElementById('elk-edge-routing')?.value || 'ORTHOGONAL';
@@ -1839,7 +1874,7 @@ class InteractiveEditor {
 
         // Get parameters from controls
         const flowDirection = document.getElementById('flow-direction')?.value || 'none';
-        const flowSpacing = parseInt(document.getElementById('flow-spacing-slider')?.value || 150);
+        const flowSpacing = parseInt(document.getElementById('flow-spacing-slider')?.value || 50);
         const dagreRanker = document.getElementById('dagre-ranker')?.value || 'network-simplex';
         const dagreAlign = document.getElementById('dagre-align')?.value || '';
 
@@ -1989,8 +2024,8 @@ class InteractiveEditor {
         if (this.boxes.size === 0) return;
 
         // Get canvas dimensions
-        const canvasWidth = parseInt(document.getElementById('canvas-width-slider')?.value || 800);
-        const canvasHeight = parseInt(document.getElementById('canvas-height-slider')?.value || 600);
+        const canvasWidth = parseInt(document.getElementById('canvas-width-slider')?.value || 400);
+        const canvasHeight = parseInt(document.getElementById('canvas-height-slider')?.value || 300);
 
         // Calculate bounding box of all objects
         let minX = Infinity, minY = Infinity;
@@ -2093,6 +2128,48 @@ class InteractiveEditor {
                 x: x || 100,
                 y: y || 100
             });
+        }
+    }
+
+    async handleFileSelected(event) {
+        /**
+         * Read a patch file chosen via the native file picker and send its text
+         * to the server. A .maxpat is JSON, so the server parses the contents
+         * (the browser cannot expose the file's real path for a server-side open).
+         *
+         * Progress is echoed to the info bar so failures are visible without the
+         * dev console. Uses Blob.text() (well-supported in modern Safari) rather
+         * than FileReader.
+         */
+        const input = event.target;
+        const file = input.files && input.files[0];
+        if (!file) {
+            this.updateInfo('No file selected');
+            return;
+        }
+
+        this.updateInfo(`Reading ${file.name}...`);
+        try {
+            const content = await file.text();
+            this.updateInfo(`Opening ${file.name}...`);
+
+            // Discard layout/selection state tied to the previous patch so
+            // Reset Layout does not restore positions from a different file.
+            this.originalPositions.clear();
+            this.selectedBox = null;
+            this.selectedLine = null;
+
+            this.sendMessage({
+                type: 'open_content',
+                filename: file.name,
+                content: content
+            });
+        } catch (err) {
+            console.error('Could not read file:', err);
+            this.updateInfo(`Could not read ${file.name}: ${err && err.message}`);
+        } finally {
+            // Reset after reading so re-picking the same file re-fires 'change'.
+            input.value = '';
         }
     }
 

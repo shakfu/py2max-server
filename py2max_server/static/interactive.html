@@ -95,6 +95,27 @@
             white-space: nowrap;
         }
 
+        /* The Open control is a <label for> (so the native file dialog opens on a
+           genuine click, which Safari requires) styled to match the buttons. */
+        #open-btn {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 10px;
+            background: #4080ff;
+            color: white;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 500;
+            white-space: nowrap;
+            user-select: none;
+            transition: background 0.2s;
+        }
+
+        #open-btn:hover {
+            background: #5090ff;
+        }
+
         button {
             padding: 4px 10px;
             background: #4080ff;
@@ -410,6 +431,37 @@
             cursor: pointer;
         }
 
+        /* Advanced disclosure: a subtle section header (not a blue action button). */
+        #advanced-toggle {
+            background: transparent;
+            color: #aaa;
+            text-align: left;
+            padding: 6px 0;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-top: 1px solid #444;
+            border-radius: 0;
+            cursor: pointer;
+        }
+
+        #advanced-toggle:hover {
+            background: transparent;
+            color: #fff;
+        }
+
+        /* When open, the wrapper dissolves so its groups join the panel's flex
+           layout (preserving the per-engine show/hide and gap). When collapsed,
+           display:none hides the whole subtree regardless of child overrides. */
+        #advanced-body {
+            display: contents;
+        }
+
+        #advanced-body.collapsed {
+            display: none;
+        }
+
         /* Parameter visibility based on layout engine - MUST come after .control-group */
         /* Default: hide elk params (tabindex=2), show cola params (tabindex=1) */
         #layout-controls .control-group.param-elk-only[tabindex="2"] {
@@ -501,6 +553,7 @@
             <button id="toggle-layout-mode-btn" title="Toggle between panel and sidebar layout">📋 Panel Mode</button>
             <button id="parent-btn" title="Go to parent patcher (ESC)">⬆️ Parent</button>
             <button id="auto-layout-btn" title="Auto-arrange objects using force-directed layout">🔄 Auto-Layout</button>
+            <label id="open-btn" for="file-input" title="Open a .maxpat file from disk">📂 Open</label>
             <button id="save-btn" title="Save patch to .maxpat file">💾 Save</button>
             <button id="create-btn" title="Create new object">+ Object</button>
             <div id="status" class="disconnected">
@@ -510,21 +563,13 @@
     </div>
 
     <div id="layout-controls">
+        <!-- Primary controls: enough for a good layout with the compact defaults. -->
         <div class="control-group param-shared">
             <label>Layout Engine</label>
             <select id="layout-engine" style="padding: 4px 8px; background: #444; color: #fff; border: 1px solid #666; border-radius: 3px; cursor: pointer;">
                 <option value="cola">WebCola (Force-Directed)</option>
                 <option value="elk">ELK (Layered + Ports)</option>
                 <option value="dagre">Dagre (Hierarchical DAG)</option>
-            </select>
-        </div>
-        <div class="control-group param-cola-only" tabindex="1">
-            <label>Constraint Preset</label>
-            <select id="constraint-preset" style="padding: 4px 8px; background: #444; color: #fff; border: 1px solid #666; border-radius: 3px; cursor: pointer;">
-                <option value="none">None</option>
-                <option value="horizontal-flow">Horizontal Flow</option>
-                <option value="vertical-flow">Vertical Flow</option>
-                <option value="grid">Grid Alignment</option>
             </select>
         </div>
         <div class="control-group param-shared">
@@ -537,92 +582,115 @@
                 <option value="y-reverse">Vertical (Bottom-to-Top)</option>
             </select>
         </div>
-        <div class="control-group param-shared">
-            <label>Flow Spacing</label>
-            <input type="range" id="flow-spacing-slider" min="50" max="300" value="150" step="10">
-            <span class="value-display" id="flow-spacing-value">150</span>
+
+        <!-- Advanced: engine-internal parameters, collapsed by default. -->
+        <button id="advanced-toggle" type="button" aria-expanded="false">+ Advanced</button>
+        <div id="advanced-body" class="collapsed">
+            <div class="control-group param-shared">
+                <label>Flow Spacing</label>
+                <input type="range" id="flow-spacing-slider" min="50" max="300" value="50" step="10">
+                <span class="value-display" id="flow-spacing-value">50</span>
+            </div>
+            <div class="control-group param-cola-only" tabindex="1">
+                <label>Constraint Preset</label>
+                <select id="constraint-preset" style="padding: 4px 8px; background: #444; color: #fff; border: 1px solid #666; border-radius: 3px; cursor: pointer;">
+                    <option value="none">None</option>
+                    <option value="horizontal-flow">Horizontal Flow</option>
+                    <option value="vertical-flow">Vertical Flow</option>
+                    <option value="grid">Grid Alignment</option>
+                </select>
+            </div>
+            <div class="control-group param-cola-only" tabindex="1">
+                <label>Link Distance</label>
+                <input type="range" id="link-distance-slider" min="50" max="300" value="100" step="10">
+                <span class="value-display" id="link-distance-value">100</span>
+            </div>
+            <div class="control-group param-cola-only" tabindex="1">
+                <label>Iterations</label>
+                <input type="range" id="iterations-slider" min="10" max="200" value="50" step="10">
+                <span class="value-display" id="iterations-value">50</span>
+            </div>
+            <div class="control-group param-shared">
+                <label>Canvas Width</label>
+                <input type="range" id="canvas-width-slider" min="400" max="1600" value="400" step="50">
+                <span class="value-display" id="canvas-width-value">400</span>
+            </div>
+            <div class="control-group param-shared">
+                <label>Canvas Height</label>
+                <input type="range" id="canvas-height-slider" min="300" max="1200" value="300" step="50">
+                <span class="value-display" id="canvas-height-value">300</span>
+            </div>
+            <div class="control-group param-shared">
+                <label>Min ViewBox Width</label>
+                <input type="range" id="min-viewbox-width-slider" min="400" max="1600" value="400" step="50">
+                <span class="value-display" id="min-viewbox-width-value">400</span>
+            </div>
+            <div class="control-group param-shared">
+                <label>Min ViewBox Height</label>
+                <input type="range" id="min-viewbox-height-slider" min="300" max="1200" value="300" step="50">
+                <span class="value-display" id="min-viewbox-height-value">300</span>
+            </div>
+            <div class="control-group param-cola-only" tabindex="1">
+                <label>Avoid Overlaps</label>
+                <input type="checkbox" id="avoid-overlaps-checkbox" checked>
+            </div>
+            <div class="control-group param-elk-only" tabindex="2">
+                <label>ELK Algorithm</label>
+                <select id="elk-algorithm" style="padding: 4px 8px; background: #444; color: #fff; border: 1px solid #666; border-radius: 3px; cursor: pointer;">
+                    <option value="layered">Layered (Hierarchical)</option>
+                    <option value="force">Force-Directed</option>
+                    <option value="stress">Stress Minimization</option>
+                    <option value="mrtree">Tree (Multi-Root)</option>
+                </select>
+            </div>
+            <div class="control-group param-elk-only" tabindex="2">
+                <label>Node Placement</label>
+                <select id="elk-node-placement" style="padding: 4px 8px; background: #444; color: #fff; border: 1px solid #666; border-radius: 3px; cursor: pointer;">
+                    <option value="NETWORK_SIMPLEX">Network Simplex</option>
+                    <option value="LINEAR_SEGMENTS">Linear Segments</option>
+                    <option value="BRANDES_KOEPF">Brandes-Koepf</option>
+                    <option value="SIMPLE">Simple</option>
+                </select>
+            </div>
+            <div class="control-group param-elk-only" tabindex="2">
+                <label>Edge Routing</label>
+                <select id="elk-edge-routing" style="padding: 4px 8px; background: #444; color: #fff; border: 1px solid #666; border-radius: 3px; cursor: pointer;">
+                    <option value="ORTHOGONAL">Orthogonal</option>
+                    <option value="POLYLINE">Polyline</option>
+                    <option value="SPLINES">Splines</option>
+                </select>
+            </div>
+            <div class="control-group param-dagre-only" tabindex="3">
+                <label>Dagre Ranker</label>
+                <select id="dagre-ranker" style="padding: 4px 8px; background: #444; color: #fff; border: 1px solid #666; border-radius: 3px; cursor: pointer;">
+                    <option value="network-simplex">Network Simplex (Default)</option>
+                    <option value="tight-tree">Tight Tree</option>
+                    <option value="longest-path">Longest Path</option>
+                </select>
+            </div>
+            <div class="control-group param-dagre-only" tabindex="3">
+                <label>Dagre Align</label>
+                <select id="dagre-align" style="padding: 4px 8px; background: #444; color: #fff; border: 1px solid #666; border-radius: 3px; cursor: pointer;">
+                    <option value="">None (Default)</option>
+                    <option value="UL">Upper Left</option>
+                    <option value="UR">Upper Right</option>
+                    <option value="DL">Down Left</option>
+                    <option value="DR">Down Right</option>
+                </select>
+            </div>
         </div>
-        <div class="control-group param-cola-only" tabindex="1">
-            <label>Link Distance</label>
-            <input type="range" id="link-distance-slider" min="50" max="300" value="100" step="10">
-            <span class="value-display" id="link-distance-value">100</span>
-        </div>
-        <div class="control-group param-cola-only" tabindex="1">
-            <label>Iterations</label>
-            <input type="range" id="iterations-slider" min="10" max="200" value="50" step="10">
-            <span class="value-display" id="iterations-value">50</span>
-        </div>
-        <div class="control-group param-shared">
-            <label>Canvas Width</label>
-            <input type="range" id="canvas-width-slider" min="400" max="1600" value="800" step="50">
-            <span class="value-display" id="canvas-width-value">800</span>
-        </div>
-        <div class="control-group param-shared">
-            <label>Canvas Height</label>
-            <input type="range" id="canvas-height-slider" min="300" max="1200" value="600" step="50">
-            <span class="value-display" id="canvas-height-value">600</span>
-        </div>
-        <div class="control-group param-shared">
-            <label>Min ViewBox Width</label>
-            <input type="range" id="min-viewbox-width-slider" min="400" max="1600" value="800" step="50">
-            <span class="value-display" id="min-viewbox-width-value">800</span>
-        </div>
-        <div class="control-group param-shared">
-            <label>Min ViewBox Height</label>
-            <input type="range" id="min-viewbox-height-slider" min="300" max="1200" value="600" step="50">
-            <span class="value-display" id="min-viewbox-height-value">600</span>
-        </div>
-        <div class="control-group param-cola-only" tabindex="1">
-            <label>Avoid Overlaps</label>
-            <input type="checkbox" id="avoid-overlaps-checkbox" checked>
-        </div>
-        <div class="control-group param-elk-only" tabindex="2">
-            <label>ELK Algorithm</label>
-            <select id="elk-algorithm" style="padding: 4px 8px; background: #444; color: #fff; border: 1px solid #666; border-radius: 3px; cursor: pointer;">
-                <option value="layered">Layered (Hierarchical)</option>
-                <option value="force">Force-Directed</option>
-                <option value="stress">Stress Minimization</option>
-                <option value="mrtree">Tree (Multi-Root)</option>
-            </select>
-        </div>
-        <div class="control-group param-elk-only" tabindex="2">
-            <label>Node Placement</label>
-            <select id="elk-node-placement" style="padding: 4px 8px; background: #444; color: #fff; border: 1px solid #666; border-radius: 3px; cursor: pointer;">
-                <option value="NETWORK_SIMPLEX">Network Simplex</option>
-                <option value="LINEAR_SEGMENTS">Linear Segments</option>
-                <option value="BRANDES_KOEPF">Brandes-Koepf</option>
-                <option value="SIMPLE">Simple</option>
-            </select>
-        </div>
-        <div class="control-group param-elk-only" tabindex="2">
-            <label>Edge Routing</label>
-            <select id="elk-edge-routing" style="padding: 4px 8px; background: #444; color: #fff; border: 1px solid #666; border-radius: 3px; cursor: pointer;">
-                <option value="ORTHOGONAL">Orthogonal</option>
-                <option value="POLYLINE">Polyline</option>
-                <option value="SPLINES">Splines</option>
-            </select>
-        </div>
-        <div class="control-group param-dagre-only" tabindex="3">
-            <label>Dagre Ranker</label>
-            <select id="dagre-ranker" style="padding: 4px 8px; background: #444; color: #fff; border: 1px solid #666; border-radius: 3px; cursor: pointer;">
-                <option value="network-simplex">Network Simplex (Default)</option>
-                <option value="tight-tree">Tight Tree</option>
-                <option value="longest-path">Longest Path</option>
-            </select>
-        </div>
-        <div class="control-group param-dagre-only" tabindex="3">
-            <label>Dagre Align</label>
-            <select id="dagre-align" style="padding: 4px 8px; background: #444; color: #fff; border: 1px solid #666; border-radius: 3px; cursor: pointer;">
-                <option value="">None (Default)</option>
-                <option value="UL">Upper Left</option>
-                <option value="UR">Upper Right</option>
-                <option value="DL">Down Left</option>
-                <option value="DR">Down Right</option>
-            </select>
-        </div>
+
         <button id="apply-layout-btn" style="margin-top: 14px;">Apply Layout</button>
         <button id="reset-layout-btn" style="margin-top: 14px;">Reset Layout</button>
     </div>
+
+    <!-- Native file picker driven by the Open button. Kept rendered but
+         visually hidden off-screen: Safari ignores .click() on a
+         display:none file input, so we can't hide it that way. -->
+    <input type="file" id="file-input"
+           accept=".maxpat,.maxhelp,.amxd,.json,application/json"
+           style="position: absolute; width: 1px; height: 1px;
+                  opacity: 0; overflow: hidden; pointer-events: none;">
 
     <div id="canvas"></div>
 

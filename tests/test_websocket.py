@@ -218,3 +218,121 @@ class TestWebSocketHandler:
 
         # Check connection was deleted
         assert len(p._lines) == 0
+
+    @pytest.mark.asyncio
+    async def test_handle_open_valid_file(self, tmp_path):
+        """Opening a valid patch file swaps in its contents."""
+        from py2max_server import InteractiveWebSocketHandler
+
+        # Write a patch file to disk to open later.
+        src_path = tmp_path / "src.maxpat"
+        src = Patcher(str(src_path))
+        src.add_textbox("cycle~ 440")
+        src.add_textbox("gain~")
+        src.save()
+
+        # Start the handler on a different, initially-empty patcher.
+        original = Patcher(str(tmp_path / "orig.maxpat"))
+        handler = InteractiveWebSocketHandler(original)
+
+        await handler.handle_open({"filepath": str(src_path)})
+
+        # The served patcher was replaced with the loaded file's contents.
+        assert handler.patcher is not original
+        assert handler.root_patcher is handler.patcher
+        assert len(handler.patcher._boxes) == 2
+
+    @pytest.mark.asyncio
+    async def test_handle_open_missing_file(self, tmp_path):
+        """Opening a missing file reports an error and leaves the patcher intact."""
+        from py2max_server import InteractiveWebSocketHandler
+
+        original = Patcher(str(tmp_path / "orig.maxpat"))
+        handler = InteractiveWebSocketHandler(original)
+
+        # Capture broadcasts (no real clients are connected).
+        sent: list = []
+
+        async def capture(msg):
+            sent.append(msg)
+
+        handler.broadcast = capture
+
+        await handler.handle_open({"filepath": str(tmp_path / "does-not-exist.maxpat")})
+
+        # Patcher is unchanged and an error was reported.
+        assert handler.patcher is original
+        assert any(m.get("type") == "open_error" for m in sent)
+
+    def test_open_message_validates(self):
+        """The 'open' message type requires a filepath string."""
+        from py2max_server.websocket import validate_message
+
+        ok, _ = validate_message({"type": "open", "filepath": "foo.maxpat"})
+        assert ok
+
+        ok, err = validate_message({"type": "open"})
+        assert not ok
+        assert "filepath" in err
+
+    @pytest.mark.asyncio
+    async def test_handle_open_content_valid(self, tmp_path):
+        """Opening from uploaded file contents swaps in the parsed patcher."""
+        import json
+
+        from py2max_server import InteractiveWebSocketHandler
+
+        # Build a patch and serialize it the way a .maxpat file is stored.
+        src_path = tmp_path / "uploaded.maxpat"
+        src = Patcher(str(src_path))
+        src.add_textbox("cycle~ 440")
+        src.add_textbox("gain~")
+        src.save()
+        content = src_path.read_text(encoding="utf8")
+        assert "patcher" in json.loads(content)  # sanity: it is a .maxpat wrapper
+
+        original = Patcher(str(tmp_path / "orig.maxpat"))
+        handler = InteractiveWebSocketHandler(original)
+
+        await handler.handle_open_content(
+            {"filename": "uploaded.maxpat", "content": content}
+        )
+
+        assert handler.patcher is not original
+        assert handler.root_patcher is handler.patcher
+        assert len(handler.patcher._boxes) == 2
+
+    @pytest.mark.asyncio
+    async def test_handle_open_content_invalid_json(self, tmp_path):
+        """Malformed upload content reports an error and keeps the patcher."""
+        from py2max_server import InteractiveWebSocketHandler
+
+        original = Patcher(str(tmp_path / "orig.maxpat"))
+        handler = InteractiveWebSocketHandler(original)
+
+        sent: list = []
+
+        async def capture(msg):
+            sent.append(msg)
+
+        handler.broadcast = capture
+
+        await handler.handle_open_content(
+            {"filename": "bad.maxpat", "content": "{not valid json"}
+        )
+
+        assert handler.patcher is original
+        assert any(m.get("type") == "open_error" for m in sent)
+
+    def test_open_content_message_validates(self):
+        """The 'open_content' message requires filename and content strings."""
+        from py2max_server.websocket import validate_message
+
+        ok, _ = validate_message(
+            {"type": "open_content", "filename": "a.maxpat", "content": "{}"}
+        )
+        assert ok
+
+        ok, err = validate_message({"type": "open_content", "filename": "a.maxpat"})
+        assert not ok
+        assert "content" in err
