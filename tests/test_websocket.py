@@ -405,3 +405,370 @@ class TestWebSocketHandler:
 
         ok, _ = validate_message({"type": "export_patch"})
         assert ok
+
+    @pytest.mark.asyncio
+    async def test_handle_list_patches_lists_files_and_dirs(self, tmp_path):
+        """The picker lists patch files and subdirectories, skipping other files."""
+        import json
+
+        from py2max_server import InteractiveWebSocketHandler
+
+        # A patch, a non-patch file (should be excluded), and a subdirectory.
+        (tmp_path / "a.maxpat").write_text("{}", encoding="utf8")
+        (tmp_path / "b.maxpat").write_text("{}", encoding="utf8")
+        (tmp_path / "notes.txt").write_text("hi", encoding="utf8")
+        (tmp_path / "sub").mkdir()
+
+        handler = InteractiveWebSocketHandler(Patcher(str(tmp_path / "orig.maxpat")))
+
+        sent = []
+
+        class FakeWS:
+            async def send(self, msg):
+                sent.append(json.loads(msg))
+
+        await handler.handle_list_patches(FakeWS(), {"directory": str(tmp_path)})
+
+        assert len(sent) == 1
+        reply = sent[0]
+        assert reply["type"] == "patch_list"
+        assert reply["directory"] == str(tmp_path.resolve())
+        assert reply["parent"] == str(tmp_path.resolve().parent)
+
+        names = [e["name"] for e in reply["entries"]]
+        assert "notes.txt" not in names  # non-patch file excluded
+        assert "a.maxpat" in names and "b.maxpat" in names
+        assert "sub" in names
+
+        # Directories sort before files.
+        dir_entry = next(e for e in reply["entries"] if e["name"] == "sub")
+        assert dir_entry["is_dir"] is True
+        assert reply["entries"][0]["is_dir"] is True
+
+    @pytest.mark.asyncio
+    async def test_handle_list_patches_skips_hidden(self, tmp_path):
+        """Hidden entries (dotfiles/dotdirs) are omitted from the listing."""
+        import json
+
+        from py2max_server import InteractiveWebSocketHandler
+
+        (tmp_path / "visible.maxpat").write_text("{}", encoding="utf8")
+        (tmp_path / ".hidden.maxpat").write_text("{}", encoding="utf8")
+        (tmp_path / ".hiddendir").mkdir()
+
+        handler = InteractiveWebSocketHandler(Patcher(str(tmp_path / "orig.maxpat")))
+        sent = []
+
+        class FakeWS:
+            async def send(self, msg):
+                sent.append(json.loads(msg))
+
+        await handler.handle_list_patches(FakeWS(), {"directory": str(tmp_path)})
+
+        names = [e["name"] for e in sent[0]["entries"]]
+        assert names == ["visible.maxpat"]
+
+    @pytest.mark.asyncio
+    async def test_handle_list_patches_defaults_to_current_patch_dir(self, tmp_path):
+        """With no directory given, the picker lists the current patch's folder."""
+        import json
+
+        from py2max_server import InteractiveWebSocketHandler
+
+        (tmp_path / "sibling.maxpat").write_text("{}", encoding="utf8")
+        patch_path = tmp_path / "current.maxpat"
+        patch_path.write_text("{}", encoding="utf8")
+
+        handler = InteractiveWebSocketHandler(Patcher(str(patch_path)))
+        sent = []
+
+        class FakeWS:
+            async def send(self, msg):
+                sent.append(json.loads(msg))
+
+        await handler.handle_list_patches(FakeWS(), {})
+
+        assert sent[0]["directory"] == str(tmp_path.resolve())
+        names = [e["name"] for e in sent[0]["entries"]]
+        assert "sibling.maxpat" in names
+
+    @pytest.mark.asyncio
+    async def test_handle_list_patches_bad_directory_falls_back(self, tmp_path):
+        """A nonexistent requested directory falls back to the default, not error."""
+        import json
+
+        from py2max_server import InteractiveWebSocketHandler
+
+        patch_path = tmp_path / "current.maxpat"
+        patch_path.write_text("{}", encoding="utf8")
+        handler = InteractiveWebSocketHandler(Patcher(str(patch_path)))
+
+        sent = []
+
+        class FakeWS:
+            async def send(self, msg):
+                sent.append(json.loads(msg))
+
+        await handler.handle_list_patches(
+            FakeWS(), {"directory": str(tmp_path / "no-such-dir")}
+        )
+
+        assert sent[0]["type"] == "patch_list"
+        assert sent[0]["directory"] == str(tmp_path.resolve())
+
+    def test_list_patches_validates(self):
+        """The 'list_patches' message needs no fields (directory is optional)."""
+        from py2max_server.websocket import validate_message
+
+        ok, _ = validate_message({"type": "list_patches"})
+        assert ok
+
+        ok, _ = validate_message({"type": "list_patches", "directory": "/tmp"})
+        assert ok
+
+
+class TestUndoRedo:
+    """Tests for server-side undo/redo snapshots and batch mutations."""
+
+    @pytest.mark.asyncio
+    async def test_undo_create_object(self):
+        """Undo removes a just-created object; redo brings it back."""
+        from py2max_server import InteractiveWebSocketHandler
+
+        p = Patcher("test.maxpat")
+        handler = InteractiveWebSocketHandler(p)
+
+        await handler.handle_create_object({"text": "cycle~ 440", "x": 10, "y": 20})
+        assert len(handler.patcher._boxes) == 1
+
+        await handler.handle_undo()
+        assert len(handler.patcher._boxes) == 0
+
+        await handler.handle_redo()
+        assert len(handler.patcher._boxes) == 1
+        assert handler.patcher._boxes[0].text == "cycle~ 440"
+
+    @pytest.mark.asyncio
+    async def test_undo_delete_object_restores_lines(self):
+        """Undoing a delete restores the box and its connected lines."""
+        from py2max_server import InteractiveWebSocketHandler
+
+        p = Patcher("test.maxpat")
+        b1 = p.add_textbox("cycle~ 440")
+        b2 = p.add_textbox("gain~")
+        p.add_line(b1, b2)
+        handler = InteractiveWebSocketHandler(p)
+
+        await handler.handle_delete_object({"box_id": b1.id})
+        assert len(handler.patcher._boxes) == 1
+        assert len(handler.patcher._lines) == 0
+
+        await handler.handle_undo()
+        assert len(handler.patcher._boxes) == 2
+        assert len(handler.patcher._lines) == 1
+
+    @pytest.mark.asyncio
+    async def test_undo_edit_object_text(self):
+        """Undo reverts an in-place text edit."""
+        from py2max_server import InteractiveWebSocketHandler
+
+        p = Patcher("test.maxpat")
+        box = p.add_textbox("cycle~ 440")
+        handler = InteractiveWebSocketHandler(p)
+
+        await handler.handle_edit_object_text({"box_id": box.id, "text": "cycle~ 880"})
+        assert handler.patcher._boxes[0].text == "cycle~ 880"
+
+        await handler.handle_undo()
+        assert handler.patcher._boxes[0].text == "cycle~ 440"
+
+    @pytest.mark.asyncio
+    async def test_undo_noop_when_empty(self):
+        """Undo/redo with empty stacks are safe no-ops."""
+        from py2max_server import InteractiveWebSocketHandler
+
+        p = Patcher("test.maxpat")
+        p.add_textbox("cycle~ 440")
+        handler = InteractiveWebSocketHandler(p)
+
+        await handler.handle_undo()  # nothing recorded yet
+        await handler.handle_redo()
+        assert len(handler.patcher._boxes) == 1
+
+    @pytest.mark.asyncio
+    async def test_new_mutation_clears_redo(self):
+        """A fresh mutation after an undo discards the redo stack."""
+        from py2max_server import InteractiveWebSocketHandler
+
+        p = Patcher("test.maxpat")
+        handler = InteractiveWebSocketHandler(p)
+
+        await handler.handle_create_object({"text": "a", "x": 0, "y": 0})
+        await handler.handle_undo()
+        assert handler.redo_stack  # redo now available
+
+        await handler.handle_create_object({"text": "b", "x": 0, "y": 0})
+        assert not handler.redo_stack  # discarded by the new mutation
+
+    @pytest.mark.asyncio
+    async def test_undo_preserves_filepath(self, tmp_path):
+        """Restoring a snapshot keeps the on-disk path so Save still works."""
+        from py2max_server import InteractiveWebSocketHandler
+
+        path = tmp_path / "keep.maxpat"
+        p = Patcher(str(path))
+        handler = InteractiveWebSocketHandler(p)
+
+        await handler.handle_create_object({"text": "a", "x": 0, "y": 0})
+        await handler.handle_undo()
+
+        restored = getattr(handler.root_patcher, "_path", None) or getattr(
+            handler.root_patcher, "filepath", None
+        )
+        assert str(restored) == str(path)
+
+    @pytest.mark.asyncio
+    async def test_update_positions_batch_is_one_undo_step(self):
+        """A group move is a single undo step covering every moved box."""
+        from py2max_server import InteractiveWebSocketHandler
+
+        p = Patcher("test.maxpat")
+        b1 = p.add_textbox("a")
+        b2 = p.add_textbox("b")
+        handler = InteractiveWebSocketHandler(p)
+
+        await handler.handle_update_positions(
+            {
+                "positions": [
+                    {"box_id": b1.id, "x": 300, "y": 400},
+                    {"box_id": b2.id, "x": 500, "y": 600},
+                ]
+            }
+        )
+
+        def rect_of(box):
+            r = box.patching_rect
+            return (r.x, r.y) if hasattr(r, "x") else (r[0], r[1])
+
+        assert rect_of(handler.patcher._boxes[0]) == (300, 400)
+        assert rect_of(handler.patcher._boxes[1]) == (500, 600)
+        assert len(handler.undo_stack) == 1
+
+        await handler.handle_undo()
+        # Both boxes revert together.
+        assert rect_of(handler.patcher._boxes[0]) != (300, 400)
+        assert rect_of(handler.patcher._boxes[1]) != (500, 600)
+
+    @pytest.mark.asyncio
+    async def test_delete_objects_batch_is_one_undo_step(self):
+        """A group delete is a single undo step restoring all boxes."""
+        from py2max_server import InteractiveWebSocketHandler
+
+        p = Patcher("test.maxpat")
+        b1 = p.add_textbox("a")
+        b2 = p.add_textbox("b")
+        p.add_textbox("c")
+        handler = InteractiveWebSocketHandler(p)
+
+        await handler.handle_delete_objects({"box_ids": [b1.id, b2.id]})
+        assert len(handler.patcher._boxes) == 1
+        assert len(handler.undo_stack) == 1
+
+        await handler.handle_undo()
+        assert len(handler.patcher._boxes) == 3
+
+    @pytest.mark.asyncio
+    async def test_undo_inside_subpatcher_keeps_view(self):
+        """Undo while inside a subpatcher restores state and keeps the view."""
+        from py2max_server import InteractiveWebSocketHandler
+
+        p = Patcher("test.maxpat", title="Main")
+        sub_box = p.add_subpatcher("p sub")
+        sub = sub_box.subpatcher
+        handler = InteractiveWebSocketHandler(p)
+
+        await handler.handle_navigate_to_subpatcher({"box_id": sub_box.id})
+        assert handler.view_path == [sub_box.id]
+
+        # Create an object inside the subpatcher, then undo it.
+        await handler.handle_create_object({"text": "cycle~ 440", "x": 0, "y": 0})
+        assert len(handler.patcher._boxes) == len(sub._boxes)
+        created = len(handler.patcher._boxes)
+
+        await handler.handle_undo()
+        # Still viewing the subpatcher (by path), with the object removed.
+        assert handler.view_path == [sub_box.id]
+        assert len(handler.patcher._boxes) == created - 1
+
+    def test_undo_redo_and_batch_messages_validate(self):
+        """undo/redo need no fields; batch ops require their list field."""
+        from py2max_server.websocket import validate_message
+
+        assert validate_message({"type": "undo"})[0]
+        assert validate_message({"type": "redo"})[0]
+        assert validate_message({"type": "update_positions", "positions": []})[0]
+        assert validate_message({"type": "delete_objects", "box_ids": []})[0]
+        assert not validate_message({"type": "update_positions"})[0]
+        assert not validate_message({"type": "delete_objects"})[0]
+
+
+class TestPortLabels:
+    """Tests for maxref-derived inlet/outlet labels in the patch state."""
+
+    def test_object_name_resolution(self):
+        from py2max_server.websocket import _object_name_from_box
+
+        # Text box: object is the first token.
+        assert _object_name_from_box("cycle~ 440", "newobj") == "cycle~"
+        # UI object: name comes from maxclass when text is empty.
+        assert _object_name_from_box("", "number") == "number"
+        # Non-object boxes get no name (so no maxref lookup).
+        assert _object_name_from_box("0.5", "message") == ""
+        assert _object_name_from_box("hello", "comment") == ""
+
+    def test_label_from_entry_prefers_digest_then_type(self):
+        from py2max_server.websocket import _label_from_entry
+
+        assert _label_from_entry({"digest": "Frequency", "type": "signal"}) == "Frequency"
+        assert _label_from_entry({"digest": "", "type": "signal"}) == "signal"
+        # Placeholder types are suppressed to empty.
+        assert _label_from_entry({"digest": "", "type": "INLET_TYPE"}) == ""
+        assert _label_from_entry({"digest": "", "type": ""}) == ""
+
+    def test_state_includes_labels_for_known_object(self):
+        from py2max_server.websocket import get_patcher_state_json
+
+        p = Patcher("test.maxpat")
+        p.add_textbox("cycle~ 440")
+        state = get_patcher_state_json(p)
+        box = state["boxes"][0]
+
+        assert box["inlet_labels"] == ["Frequency", "Phase (0-1)"]
+        # Outlet has no digest -> falls back to its type.
+        assert box["outlet_labels"] == ["signal"]
+        # Labels are sized to the port counts.
+        assert len(box["inlet_labels"]) == box["inlet_count"]
+        assert len(box["outlet_labels"]) == box["outlet_count"]
+
+    def test_state_omits_labels_for_non_object(self):
+        from py2max_server.websocket import get_patcher_state_json
+
+        p = Patcher("test.maxpat")
+        p.add_comment("just a note")
+        state = get_patcher_state_json(p)
+        box = state["boxes"][0]
+
+        assert "inlet_labels" not in box
+        assert "outlet_labels" not in box
+
+    def test_state_handles_unknown_object_gracefully(self):
+        from py2max_server.websocket import get_patcher_state_json
+
+        p = Patcher("test.maxpat")
+        p.add_textbox("zzznotanobject~ 1")
+        state = get_patcher_state_json(p)
+        box = state["boxes"][0]
+
+        # No maxref entry -> no labels, but the box still serializes fine.
+        assert "inlet_labels" not in box
+        assert box["text"] == "zzznotanobject~ 1"

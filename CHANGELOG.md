@@ -4,6 +4,36 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.2.0]
+
+### Added
+
+- **Inlet/outlet tooltips from the maxref database.** Hovering a port shows its name (e.g. `cycle~` inlet 0 -> "Frequency"), resolved from py2max's `maxref` object reference and cached per object. Ports fall back to a generic "Inlet N" / "Outlet N" where maxref has no usable entry (unrecognized objects, abstractions, message/comment boxes). Labels reflect the base object, so arg-driven port changes on objects like `pack` or `zl` are not specialized.
+
+- **Undo/redo.** Undo and redo any edit (create, delete, move, connect, edit text, and group operations) at any subpatcher depth, via Undo/Redo buttons or Cmd/Ctrl-Z and Cmd/Ctrl-Shift-Z (Ctrl-Y also redoes). Implemented as server-side snapshots so the patch on the server stays the single source of truth; history is bounded and resets when a different file is opened.
+
+- **Drag-to-connect with a live cord.** Press a port and drag a rubber-band cord to a target; compatible (opposite-type) ports highlight, and the one under the cursor is emphasized. Releasing on a compatible port makes the connection. The original two-click connect still works for a press-release without a drag.
+
+- **Multi-select.** Rubber-band marquee selection and shift-click to toggle individual objects. Dragging moves the whole selection together and Delete removes it, each as a single undo step.
+
+- **Create-object modal with typeahead.** Creating an object now opens an in-page dialog with a type-ahead list of common Max objects (instead of a blocking browser prompt), and places the new object where you double-clicked.
+
+- **Server-side file picker.** The Open button now lists `.maxpat` files and folders on the server in a modal (browsable, with an "up" entry) and opens the chosen file by its real path (`list_patches` -> `open`), so the opened patch can be saved back in place. This removes the browser file-API dependency and fixes Open in Safari. The native browser upload remains as a fallback.
+
+- **Pan and zoom.** Mouse wheel zooms toward the cursor (the point under the cursor stays fixed); Space-drag or middle-mouse pans. A "Fit" button and the `f` key re-frame the whole patch. Manual zoom/pan persists across edits to the same patcher; auto-fit re-engages when opening or navigating patchers and after Auto-Layout / Reset Layout.
+
+- **Clickable breadcrumb.** Each ancestor in the breadcrumb is now clickable and jumps directly to that patcher (root via `navigate_to_root`, intermediate levels via a new `navigate_up` message that ascends in a single step).
+
+### Changed
+
+- **Dragging an object updates only that object** (and its connected patchlines) instead of re-rendering the entire canvas on every mouse move, and the dragged box keeps its selection afterward so it can be moved and then deleted without re-selecting.
+
+- **WebSocket reconnect uses exponential backoff** (capped, with a bounded number of attempts and a give-up state) instead of retrying every 3 seconds indefinitely.
+
+### Fixed
+
+- **Delete/Backspace no longer acts on the canvas while typing in a form control** (the layout controls or the inline text editor) and only deletes when an object or connection is actually selected, so it no longer blocks browser back-navigation for no reason.
+
 ## [0.1.1]
 
 ### Added

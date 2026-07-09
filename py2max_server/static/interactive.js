@@ -3,6 +3,30 @@
  * Uses WebSocket for bidirectional real-time communication
  */
 
+// Common Max/MSP objects offered as typeahead suggestions in the create modal.
+// Not exhaustive -- users can type any object name.
+const COMMON_MAX_OBJECTS = [
+    // Control / messaging
+    'message', 'comment', 'bang', 'toggle', 'button', 'metro', 'counter',
+    'int', 'float', 'number', 'flonum', 'trigger', 't', 'gate', 'switch',
+    'select', 'sel', 'route', 'pack', 'unpack', 'pak', 'zl', 'coll', 'dict',
+    'send', 'receive', 's', 'r', 'loadbang', 'delay', 'pipe', 'line',
+    'scale', 'expr', 'if', 'change', 'past', 'peak', 'trough', 'accum',
+    // MSP (signal)
+    'cycle~', 'phasor~', 'saw~', 'rect~', 'tri~', 'noise~', 'pink~',
+    'gain~', 'live.gain~', '*~', '+~', '-~', '/~', 'sig~', 'line~', 'curve~',
+    'adsr~', 'dac~', 'adc~', 'ezdac~', 'ezadc~', 'meter~', 'scope~',
+    'lores~', 'onepole~', 'biquad~', 'filtergraph~', 'svf~', 'reson~',
+    'delay~', 'tapin~', 'tapout~', 'record~', 'groove~', 'buffer~', 'play~',
+    'selector~', 'gate~', 'matrix~', 'send~', 'receive~', 'pfft~', 'fft~',
+    // UI
+    'slider', 'dial', 'live.dial', 'live.slider', 'kslider', 'pictslider',
+    'umenu', 'tab', 'matrixctrl', 'nslider', 'rslider', 'multislider',
+    'function', 'waveform~', 'spectroscope~', 'live.text', 'live.button',
+    // Structure
+    'patcher', 'p', 'bpatcher', 'poly~', 'inlet', 'outlet', 'in', 'out',
+];
+
 class InteractiveEditor {
     constructor() {
         this.boxes = new Map();
@@ -12,20 +36,41 @@ class InteractiveEditor {
 
         // Interaction state
         this.selectedBox = null;
+        this.selectedBoxes = new Set();  // Multi-select: ids of selected boxes
         this.selectedLine = null;  // Track selected patchline for deletion
         this.dragging = false;
         this.dragStarted = false;  // Track if drag actually started
         this.dragOffset = { x: 0, y: 0 };
         this.mouseDownPos = null;  // Track mouse down position
+        this.dragBoxes = null;     // Per-box start positions for a (group) drag
+        this.dragAnchorId = null;  // The box actually pressed (collapse target)
+        this.marquee = null;       // Active rubber-band selection, if any
 
         // Connection state - tracks outlet -> inlet connections
-        this.connectionStart = null;  // {box, portIndex, isOutlet}
+        this.connectionStart = null;  // {box, portIndex, isOutlet} (two-click fallback)
+        this.connectionDrag = null;   // {box, portIndex, isOutlet, start, moved} (drag-to-connect)
+        this.previewLine = null;      // transient rubber-band cord during a drag
+
+        // Pan/zoom state. When userAdjustedView is true, updateViewBox() leaves
+        // the viewBox alone (preserving the user's zoom/pan) instead of
+        // auto-fitting on every render. It re-engages auto-fit when the shown
+        // patcher changes (open file / navigate), tracked by _viewPatcherKey.
+        this.userAdjustedView = false;
+        this._viewPatcherKey = null;
+        this.panning = false;
+        this.panStart = null;   // {clientX, clientY, vb} captured at pan start
+        this.spaceDown = false; // Space held -> left-drag pans instead of selecting
 
         // Store original box positions for reset functionality
         this.originalPositions = new Map();
 
         // Current filepath (for save/save-as logic)
         this.currentFilepath = null;
+
+        // Reconnect backoff state (see initializeWebSocket / onclose)
+        this.reconnectAttempts = 0;
+        this.reconnectTimer = null;
+        this.MAX_RECONNECT_ATTEMPTS = 8;  // ~ up to 30 s cap, then give up
 
         // Whether to hide comment annotation nodes (they clutter auto-layout).
         // Non-destructive: comments stay in the patch and are still saved.
@@ -34,6 +79,7 @@ class InteractiveEditor {
         this.initializeWebSocket();
         this.initializeSVG();
         this.initializeControls();
+        this.initializeCreateModal();
         this.initializeHeaderHeightSync();
     }
 
@@ -100,6 +146,9 @@ class InteractiveEditor {
                 // Handle authentication response
                 if (data.type === 'auth_success') {
                     this.authenticated = true;
+                    // A confirmed connection resets the backoff so the next drop
+                    // starts probing quickly again.
+                    this.reconnectAttempts = 0;
                     this.updateStatus('Connected', 'connected');
                     console.log('Authentication successful');
                     return;
@@ -137,14 +186,26 @@ class InteractiveEditor {
                 return;
             }
 
-            this.updateStatus('Disconnected', 'disconnected');
             console.log('WebSocket connection closed');
 
-            // Attempt to reconnect
-            setTimeout(() => {
+            // Give up after a bounded number of tries instead of spinning on a
+            // dead server forever.
+            if (this.reconnectAttempts >= this.MAX_RECONNECT_ATTEMPTS) {
+                this.updateStatus('Disconnected - reload to retry', 'disconnected');
+                console.error('Giving up reconnecting after', this.reconnectAttempts, 'attempts');
+                return;
+            }
+
+            // Exponential backoff with a 30 s cap: 1s, 2s, 4s, 8s, 16s, 30s...
+            const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+            this.reconnectAttempts += 1;
+            this.updateStatus(`Disconnected - retrying in ${Math.round(delay / 1000)}s`, 'disconnected');
+
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = setTimeout(() => {
                 this.updateStatus('Reconnecting...', 'disconnected');
                 this.initializeWebSocket();
-            }, 3000);
+            }, delay);
         };
     }
 
@@ -176,6 +237,12 @@ class InteractiveEditor {
         // because re-rendering on mousedown makes the native dblclick unreliable.
         this.svg.addEventListener('dblclick', this.handleCanvasDoubleClick.bind(this));
 
+        // Wheel zooms toward the cursor. passive:false so preventDefault stops
+        // the page from scrolling under the zoom.
+        this.svg.addEventListener('wheel', this.handleWheel.bind(this), { passive: false });
+        // End an in-progress pan if the pointer leaves the canvas.
+        this.svg.addEventListener('mouseleave', () => this.endPan());
+
         console.log('SVG.js initialized:', SVG);
     }
 
@@ -202,12 +269,30 @@ class InteractiveEditor {
             });
         }
 
-        // Open control is a <label for="file-input">, so the native file dialog
-        // opens on click without a programmatic .click() (which Safari blocks).
-        // We only need to react once a file is chosen.
+        // Open uses the server-side file picker (lists .maxpat files on the
+        // server): it avoids the browser file API entirely, which fixes Open in
+        // Safari and preserves the real filesystem path for save-back.
+        const openBtn = document.getElementById('open-btn');
+        if (openBtn) {
+            openBtn.addEventListener('click', () => this.openFilePicker());
+        }
+
+        // Native upload is kept as a fallback (e.g. server and browser on
+        // different machines). The <label for="file-input"> in the picker modal
+        // opens the dialog without a programmatic .click() (which Safari blocks).
         const fileInput = document.getElementById('file-input');
         if (fileInput) {
             fileInput.addEventListener('change', (e) => this.handleFileSelected(e));
+        }
+
+        // File-picker modal controls
+        const pickerClose = document.getElementById('file-picker-close');
+        if (pickerClose) {
+            pickerClose.addEventListener('click', () => this.closeFilePicker());
+        }
+        const pickerBackdrop = document.getElementById('file-picker-backdrop');
+        if (pickerBackdrop) {
+            pickerBackdrop.addEventListener('click', () => this.closeFilePicker());
         }
 
         // Save button
@@ -246,6 +331,22 @@ class InteractiveEditor {
             });
         }
 
+        // Fit-to-view button (re-engage auto-fit after zoom/pan).
+        const fitViewBtn = document.getElementById('fit-view-btn');
+        if (fitViewBtn) {
+            fitViewBtn.addEventListener('click', () => this.fitView());
+        }
+
+        // Undo / redo buttons
+        const undoBtn = document.getElementById('undo-btn');
+        if (undoBtn) {
+            undoBtn.addEventListener('click', () => this.undo());
+        }
+        const redoBtn = document.getElementById('redo-btn');
+        if (redoBtn) {
+            redoBtn.addEventListener('click', () => this.redo());
+        }
+
         // Auto-layout button - toggle layout controls panel
         const autoLayoutBtn = document.getElementById('auto-layout-btn');
         if (autoLayoutBtn) {
@@ -272,12 +373,80 @@ class InteractiveEditor {
 
         // Keyboard handler for delete/backspace and ESC
         document.addEventListener('keydown', (e) => {
+            // While a modal is open, Escape closes it and other editor keys are
+            // ignored so they don't act on the patch behind the modal. (The
+            // create modal's own input also handles Enter/Escape and stops
+            // propagation, so this mainly covers Escape when it isn't focused.)
+            if (this.isFilePickerOpen()) {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    this.closeFilePicker();
+                }
+                return;
+            }
+            if (this.isCreateModalOpen()) {
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    this.closeCreateModal();
+                }
+                return;
+            }
+
+            // Don't hijack keys while a form control is focused (layout
+            // <select>/sliders, or the inline text-edit <input>): Backspace there
+            // must edit the field, not delete the selected box, and Escape must
+            // not navigate away.
+            const t = e.target;
+            const inFormControl = !!t && (
+                t.tagName === 'INPUT' ||
+                t.tagName === 'TEXTAREA' ||
+                t.tagName === 'SELECT' ||
+                t.isContentEditable
+            );
+            if (inFormControl) return;
+
+            // Undo/redo. Gated below the form-control check above, so Cmd/Ctrl-Z
+            // in the inline text editor undoes typing (browser default), not the
+            // patch.
+            if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
+                e.preventDefault();
+                if (e.shiftKey) this.redo(); else this.undo();
+                return;
+            }
+            if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || e.key === 'Y')) {
+                e.preventDefault();
+                this.redo();
+                return;
+            }
+
             if (e.key === 'Delete' || e.key === 'Backspace') {
-                e.preventDefault();  // Prevent browser back navigation
-                this.handleDelete();
+                // Only intercept (and suppress browser back-navigation) when
+                // there is actually something selected to delete.
+                if (this.selectedBox || this.selectedLine || (this.selectedBoxes && this.selectedBoxes.size)) {
+                    e.preventDefault();
+                    this.handleDelete();
+                }
             } else if (e.key === 'Escape') {
                 // ESC key navigates to parent patcher
                 this.navigateToParent();
+            } else if (e.key === 'f' || e.key === 'F') {
+                // Fit the whole patch to the view (re-engage auto-fit).
+                e.preventDefault();
+                this.fitView();
+            } else if (e.key === ' ') {
+                // Hold Space to pan with a left-drag; suppress page scroll.
+                e.preventDefault();
+                if (!this.spaceDown) {
+                    this.spaceDown = true;
+                    if (!this.panning) this.svg.style.cursor = 'grab';
+                }
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (e.key === ' ') {
+                this.spaceDown = false;
+                if (!this.panning) this.svg.style.cursor = '';
             }
         });
 
@@ -332,12 +501,18 @@ class InteractiveEditor {
             document.getElementById('title').textContent =
                 `py2max Interactive Editor - ${patcherTitle}`;
 
+            // Re-engage auto-fit when the shown patcher changes (opened a file or
+            // navigated in/out of a subpatcher) so new content is framed; but keep
+            // the user's zoom/pan across edits to the *same* patcher.
+            const patcherKey = `${(data.patcher_path || []).join('/')}::${patcherTitle}`;
+            if (patcherKey !== this._viewPatcherKey) {
+                this._viewPatcherKey = patcherKey;
+                this.userAdjustedView = false;
+            }
+
             // Update breadcrumb
             if (data.patcher_path && data.patcher_path.length > 0) {
-                const breadcrumbPath = document.getElementById('breadcrumb-path');
-                if (breadcrumbPath) {
-                    breadcrumbPath.textContent = data.patcher_path.join(' / ');
-                }
+                this.renderBreadcrumb(data.patcher_path);
             }
 
             // Update save button tooltip with filepath
@@ -409,6 +584,11 @@ class InteractiveEditor {
         } else if (data.type === 'open_error') {
             this.updateInfo(`Open error: ${data.message}`);
             console.error('Open error:', data.message);
+        } else if (data.type === 'patch_list') {
+            this.renderFileList(data);
+        } else if (data.type === 'patch_list_error') {
+            const status = document.getElementById('file-picker-status');
+            if (status) status.textContent = data.message || 'Cannot read directory';
         }
     }
 
@@ -456,8 +636,8 @@ class InteractiveEditor {
 
             const boxGroup = this.createBox(box);
 
-            // Highlight if selected
-            if (this.selectedBox && this.selectedBox.id === box.id) {
+            // Highlight if selected (single or part of a multi-selection)
+            if (this.selectedBoxes.has(box.id)) {
                 // Add selected class to disable hover styling
                 boxGroup.node.classList.add('selected');
                 const rect = boxGroup.node.querySelector('rect');
@@ -554,10 +734,13 @@ class InteractiveEditor {
                     .attr('data-index', i)
                     .css('cursor', 'pointer');
 
-                // Add click handler for inlet (on native DOM node)
-                circle.node.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    this.handlePortClick(box, i, false);  // false = inlet
+                // Native hover tooltip: maxref label if known, else generic.
+                this.addPortTitle(circle.node, box.inlet_labels, i, 'Inlet');
+
+                // Start a connection drag on press; a press-release without a
+                // drag falls back to the two-click connect model (see mouseup).
+                circle.node.addEventListener('mousedown', (e) => {
+                    this.handlePortMouseDown(box, i, false, e);  // false = inlet
                 });
             }
         }
@@ -574,13 +757,28 @@ class InteractiveEditor {
                     .attr('data-index', i)
                     .css('cursor', 'pointer');
 
-                // Add click handler for outlet (on native DOM node)
-                circle.node.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    this.handlePortClick(box, i, true);  // true = outlet
+                // Native hover tooltip: maxref label if known, else generic.
+                this.addPortTitle(circle.node, box.outlet_labels, i, 'Outlet');
+
+                // Start a connection drag on press; a press-release without a
+                // drag falls back to the two-click connect model (see mouseup).
+                circle.node.addEventListener('mousedown', (e) => {
+                    this.handlePortMouseDown(box, i, true, e);  // true = outlet
                 });
             }
         }
+    }
+
+    addPortTitle(portNode, labels, index, kind) {
+        /**
+         * Add a native SVG <title> (hover tooltip) to a port. Uses the maxref
+         * label when present ("Inlet 0: Frequency"), else a generic "Inlet 0".
+         */
+        const label = (labels && labels[index]) ? String(labels[index]).trim() : '';
+        const text = label ? `${kind} ${index}: ${label}` : `${kind} ${index}`;
+        const titleEl = document.createElementNS(this.svgNS, 'title');
+        titleEl.textContent = text;
+        portNode.appendChild(titleEl);
     }
 
     createLine(srcBox, dstBox, line) {
@@ -747,6 +945,13 @@ class InteractiveEditor {
     }
 
     updateViewBox() {
+        // If the user has panned/zoomed, leave the view alone so an edit
+        // (create/connect/delete) or a live server update doesn't yank it back
+        // to auto-fit. Press "f" (fitView) to re-engage auto-fit.
+        if (this.userAdjustedView) {
+            return;
+        }
+
         if (this.boxes.size === 0) {
             this.svg.setAttribute('viewBox', '0 0 1200 800');
             return;
@@ -827,6 +1032,13 @@ class InteractiveEditor {
     // Event handlers for drag-and-drop
 
     handleBoxMouseDown(event, box) {
+        // While panning (Space-drag or middle-mouse), let the event bubble to the
+        // canvas handler to pan instead of selecting/dragging this box. Returning
+        // without stopPropagation lets it reach handleCanvasMouseDown.
+        if (this.spaceDown || event.button === 1) {
+            return;
+        }
+
         // Don't handle if clicking on a port - let port handler deal with it
         if (event.target.classList.contains('port') ||
             event.target.classList.contains('inlet') ||
@@ -858,29 +1070,75 @@ class InteractiveEditor {
         }
         this._lastBoxClick = { id: box.id, time: now };
 
-        // Enable dragging for all boxes (including subpatchers)
+        const svgPoint = this.getSVGPoint(event);
+        this.selectedLine = null;
+
+        // Shift-click toggles this box in the selection and does NOT start a drag.
+        if (event.shiftKey) {
+            if (this.selectedBoxes.has(box.id)) {
+                this.selectedBoxes.delete(box.id);
+                if (this.selectedBox && this.selectedBox.id === box.id) this.selectedBox = null;
+            } else {
+                this.selectedBoxes.add(box.id);
+                this.selectedBox = box;
+            }
+            this.dragging = false;
+            this.updateInfo(`${this.selectedBoxes.size} object(s) selected`);
+            this.render();
+            return;
+        }
+
+        // Non-shift press: if the box isn't part of the current multi-selection,
+        // select it alone. If it already is, keep the whole group so it can be
+        // dragged together (a click without drag collapses to it on mouseup).
+        if (!this.selectedBoxes.has(box.id)) {
+            this.selectedBoxes.clear();
+            this.selectedBoxes.add(box.id);
+        }
+        this.selectedBox = box;
+        this.dragAnchorId = box.id;
+
+        // Prepare a (possibly group) drag: snapshot start positions of all
+        // selected boxes so the move applies the same delta to each.
         this.dragging = true;
         this.dragStarted = false;  // Not started until movement
-
-        const svgPoint = this.getSVGPoint(event);
         this.mouseDownPos = { x: svgPoint.x, y: svgPoint.y };
-
-        // Calculate offset from mouse to box top-left
-        this.dragOffset = {
-            x: svgPoint.x - (box.x || 0),
-            y: svgPoint.y - (box.y || 0)
-        };
-
-        // Store which box for potential drag or selection
-        this.selectedBox = box;
-        this.selectedLine = null;  // Deselect any line
+        this.dragBoxes = [];
+        this.selectedBoxes.forEach(id => {
+            const b = this.boxes.get(id);
+            if (b) this.dragBoxes.push({ id, startX: b.x || 0, startY: b.y || 0 });
+        });
 
         // Show selection immediately (before drag starts)
         this.render();
     }
 
     handleCanvasMouseMove(event) {
-        if (this.dragging && this.selectedBox) {
+        if (this.panning && this.panStart) {
+            // Convert the pixel delta since pan-start into SVG units (CTM.a/.d is
+            // screen-per-SVG scale, constant while panning since w/h don't change)
+            // and shift the viewBox opposite to the drag so content tracks the
+            // cursor. Anchored to the start viewBox to avoid drift.
+            const CTM = this.svg.getScreenCTM();
+            const dxSvg = (event.clientX - this.panStart.clientX) / CTM.a;
+            const dySvg = (event.clientY - this.panStart.clientY) / CTM.d;
+            const vb = this.panStart.vb;
+            this.setViewBox(vb.x - dxSvg, vb.y - dySvg, vb.w, vb.h);
+            this.userAdjustedView = true;
+            return;
+        }
+
+        if (this.connectionDrag) {
+            this.updateConnectionPreview(event);
+            return;
+        }
+
+        if (this.marquee) {
+            this.updateMarquee(event);
+            return;
+        }
+
+        if (this.dragging && this.dragBoxes && this.dragBoxes.length) {
             const svgPoint = this.getSVGPoint(event);
 
             // Check if we've moved enough to start dragging (5px threshold)
@@ -892,40 +1150,205 @@ class InteractiveEditor {
                 }
             }
 
-            // Only update position if drag has actually started
+            // Apply the same delta to every selected box via the incremental
+            // path (moves existing elements, so selection strokes travel along),
+            // instead of rebuilding the whole SVG each frame.
             if (this.dragStarted) {
-                // Update local box position immediately for smooth dragging
-                this.selectedBox.x = svgPoint.x - this.dragOffset.x;
-                this.selectedBox.y = svgPoint.y - this.dragOffset.y;
-
-                // Re-render for immediate visual feedback
-                this.render();
+                const dx = svgPoint.x - this.mouseDownPos.x;
+                const dy = svgPoint.y - this.mouseDownPos.y;
+                this.dragBoxes.forEach(d => {
+                    const b = this.boxes.get(d.id);
+                    if (!b) return;
+                    b.x = d.startX + dx;
+                    b.y = d.startY + dy;
+                    this.updateBoxPosition(d.id, b.x, b.y);
+                });
             }
         }
     }
 
     handleCanvasMouseUp(event) {
-        if (this.dragging && this.selectedBox) {
-            // If drag actually started, send position update
+        if (this.panning) {
+            this.endPan();
+            return;
+        }
+
+        if (this.connectionDrag) {
+            this.finishConnectionDrag(event);
+            return;
+        }
+
+        if (this.marquee) {
+            this.finishMarquee(event);
+            return;
+        }
+
+        if (this.dragging && this.dragBoxes && this.dragBoxes.length) {
             if (this.dragStarted) {
-                this.sendMessage({
-                    type: 'update_position',
-                    box_id: this.selectedBox.id,
-                    x: this.selectedBox.x,
-                    y: this.selectedBox.y
-                });
-                // Don't keep selection after drag
-                this.selectedBox = null;
+                // Send one batch for a group move, or a single update for one box
+                // (so single-box moves keep their light-weight delta path).
+                const positions = this.dragBoxes
+                    .map(d => {
+                        const b = this.boxes.get(d.id);
+                        return b ? { box_id: d.id, x: b.x, y: b.y } : null;
+                    })
+                    .filter(Boolean);
+
+                if (positions.length === 1) {
+                    this.sendMessage({ type: 'update_position', ...positions[0] });
+                } else if (positions.length > 1) {
+                    this.sendMessage({ type: 'update_positions', positions });
+                }
+                // Keep the selection so "move then delete" works without re-selecting.
+                this.updateInfo(`Moved ${positions.length} object(s) (Press Delete to remove)`);
             } else {
-                // Just a click (no drag) - keep selection and show visual feedback
-                this.updateInfo(`Selected: ${this.selectedBox.text || this.selectedBox.id} (Press Delete to remove)`);
-                this.render();  // Show selection highlighting
+                // Click without drag: collapse a multi-selection to just this box.
+                this.selectedBoxes.clear();
+                if (this.dragAnchorId) this.selectedBoxes.add(this.dragAnchorId);
+                this.selectedBox = this.boxes.get(this.dragAnchorId) || null;
+                this.updateInfo('Selected (Press Delete to remove)');
+                this.render();
             }
 
             this.dragging = false;
             this.dragStarted = false;
             this.mouseDownPos = null;
+            this.dragBoxes = null;
         }
+    }
+
+    handlePortMouseDown(box, portIndex, isOutlet, event) {
+        // Let Space-drag / middle-mouse pan even when starting over a port.
+        if (this.spaceDown || event.button === 1) {
+            return;
+        }
+        event.stopPropagation();
+        event.preventDefault();
+
+        const start = this.getPortPosition(box, portIndex, isOutlet);
+        this.connectionDrag = { box, portIndex, isOutlet, start, moved: false };
+
+        // Rubber-band cord from the armed port to the cursor.
+        this.previewLine = this.draw
+            .line(start.x, start.y, start.x, start.y)
+            .stroke({ color: '#ff8040', width: 2, dasharray: '4,3' })
+            .addClass('connection-preview');
+        this.previewLine.attr('pointer-events', 'none');
+
+        // Highlight all compatible (opposite-type) targets for the drag.
+        const targetClass = isOutlet ? 'inlet' : 'outlet';
+        this.boxesGroup.querySelectorAll('.' + targetClass).forEach(el => {
+            el.classList.add('connect-compatible');
+        });
+
+        const portType = isOutlet ? 'outlet' : 'inlet';
+        const targetType = isOutlet ? 'inlet' : 'outlet';
+        this.updateInfo(`Drag from ${box.text || box.id} ${portType} ${portIndex} to an ${targetType} (or click to arm)`);
+    }
+
+    updateConnectionPreview(event) {
+        const pt = this.getSVGPoint(event);
+        const start = this.connectionDrag.start;
+
+        // Past a small threshold, treat it as a real drag (not a click).
+        if (!this.connectionDrag.moved) {
+            const dx = Math.abs(pt.x - start.x);
+            const dy = Math.abs(pt.y - start.y);
+            if (dx > 5 || dy > 5) this.connectionDrag.moved = true;
+        }
+
+        if (this.previewLine) {
+            this.previewLine.plot(start.x, start.y, pt.x, pt.y);
+        }
+
+        // Strong-highlight the compatible port directly under the cursor.
+        if (this._hoverPort) {
+            this._hoverPort.classList.remove('connect-hover');
+            this._hoverPort = null;
+        }
+        const info = this.portInfoFromPoint(event.clientX, event.clientY);
+        if (info && info.isOutlet !== this.connectionDrag.isOutlet) {
+            info.el.classList.add('connect-hover');
+            this._hoverPort = info.el;
+        }
+    }
+
+    finishConnectionDrag(event) {
+        const drag = this.connectionDrag;
+        const target = this.portInfoFromPoint(event.clientX, event.clientY);
+
+        // Clear preview + highlights first so any subsequent render is clean.
+        this.clearConnectionDrag();
+
+        if (drag.moved) {
+            // Drag-to-connect: require a compatible (opposite-type) target port.
+            if (target && target.isOutlet !== drag.isOutlet) {
+                this.makeConnection(
+                    drag.isOutlet
+                        ? { box: drag.box, portIndex: drag.portIndex }
+                        : { boxId: target.boxId, portIndex: target.index },
+                    drag.isOutlet
+                        ? { boxId: target.boxId, portIndex: target.index }
+                        : { box: drag.box, portIndex: drag.portIndex }
+                );
+            } else {
+                this.updateInfo('Connection cancelled');
+            }
+        } else {
+            // No movement: fall back to the two-click arm/complete model.
+            this.handlePortClick(drag.box, drag.portIndex, drag.isOutlet);
+        }
+    }
+
+    clearConnectionDrag() {
+        if (this.previewLine) {
+            this.previewLine.remove();
+            this.previewLine = null;
+        }
+        this.boxesGroup.querySelectorAll('.connect-compatible').forEach(el => {
+            el.classList.remove('connect-compatible');
+        });
+        if (this._hoverPort) {
+            this._hoverPort.classList.remove('connect-hover');
+            this._hoverPort = null;
+        }
+        this.connectionDrag = null;
+    }
+
+    portInfoFromPoint(clientX, clientY) {
+        /** Resolve the port element at a screen point to {el, boxId, index, isOutlet}. */
+        const el = document.elementFromPoint(clientX, clientY);
+        if (!el || !el.classList) return null;
+        const isInlet = el.classList.contains('inlet');
+        const isOutlet = el.classList.contains('outlet');
+        if (!isInlet && !isOutlet) return null;
+        const group = el.closest('[data-id]');
+        if (!group) return null;
+        return {
+            el,
+            boxId: group.getAttribute('data-id'),
+            index: parseInt(el.getAttribute('data-index') || '0', 10),
+            isOutlet
+        };
+    }
+
+    makeConnection(src, dst) {
+        /**
+         * Send a create_connection. src/dst are {box|boxId, portIndex}; src is the
+         * outlet side, dst the inlet side.
+         */
+        const srcId = src.box ? src.box.id : src.boxId;
+        const dstId = dst.box ? dst.box.id : dst.boxId;
+        const srcBox = this.boxes.get(srcId);
+        const dstBox = this.boxes.get(dstId);
+        this.sendMessage({
+            type: 'create_connection',
+            src_id: srcId,
+            dst_id: dstId,
+            src_outlet: src.portIndex,
+            dst_inlet: dst.portIndex
+        });
+        this.updateInfo(`Connected: ${srcBox?.text || srcId}[${src.portIndex}] -> ${dstBox?.text || dstId}[${dst.portIndex}]`);
     }
 
     handlePortClick(box, portIndex, isOutlet) {
@@ -999,7 +1422,8 @@ class InteractiveEditor {
     handleLineClick(line) {
         // Select the line for deletion
         this.selectedLine = line;
-        this.selectedBox = null;  // Deselect any box
+        this.selectedBox = null;  // Deselect any box(es)
+        this.selectedBoxes.clear();
 
         const srcBox = this.boxes.get(line.src);
         const dstBox = this.boxes.get(line.dst);
@@ -1011,6 +1435,14 @@ class InteractiveEditor {
 
     handleCanvasMouseDown(event) {
         const target = event.target;
+
+        // Pan with Space-drag or middle-mouse, anywhere on the canvas (even over
+        // boxes/ports/lines), before any selection logic runs.
+        if (this.spaceDown || event.button === 1) {
+            event.preventDefault();
+            this.startPan(event);
+            return;
+        }
 
         // Check if clicking on a port - if so, don't deselect or cancel connection
         if (target.classList.contains('port') ||
@@ -1028,16 +1460,75 @@ class InteractiveEditor {
             return;
         }
 
-        // Deselect everything when clicking on empty canvas
-        this.selectedBox = null;
+        // Empty-canvas press: start a marquee (rubber-band) selection. Shift
+        // keeps the current selection (additive); otherwise clear it.
+        if (!event.shiftKey) {
+            this.selectedBoxes.clear();
+            this.selectedBox = null;
+        }
         this.selectedLine = null;
 
-        // Cancel any pending connection
+        // Cancel any pending two-click connection
         if (this.connectionStart) {
             this.connectionStart = null;
             this.updateInfo('Connection cancelled');
-        } else {
-            this.updateInfo('');
+        }
+
+        const svgPoint = this.getSVGPoint(event);
+        this.marquee = {
+            startX: svgPoint.x,
+            startY: svgPoint.y,
+            shift: event.shiftKey,
+            moved: false,
+            rectEl: null
+        };
+
+        this.render();
+    }
+
+    updateMarquee(event) {
+        const pt = this.getSVGPoint(event);
+        const m = this.marquee;
+        const x = Math.min(m.startX, pt.x);
+        const y = Math.min(m.startY, pt.y);
+        const w = Math.abs(pt.x - m.startX);
+        const h = Math.abs(pt.y - m.startY);
+        if (w > 3 || h > 3) m.moved = true;
+
+        if (!m.rectEl) {
+            m.rectEl = this.draw.rect(w, h)
+                .addClass('marquee')
+                .fill({ color: '#4080ff', opacity: 0.15 })
+                .stroke({ color: '#4080ff', width: 1, dasharray: '4,3' });
+            m.rectEl.attr('pointer-events', 'none');
+        }
+        m.rectEl.move(x, y).size(w, h);
+    }
+
+    finishMarquee(event) {
+        const m = this.marquee;
+        if (m.rectEl) m.rectEl.remove();
+        this.marquee = null;
+
+        if (m.moved) {
+            const pt = this.getSVGPoint(event);
+            const rx = Math.min(m.startX, pt.x);
+            const ry = Math.min(m.startY, pt.y);
+            const rw = Math.abs(pt.x - m.startX);
+            const rh = Math.abs(pt.y - m.startY);
+
+            // Select every visible box whose rectangle intersects the marquee.
+            this.boxes.forEach((b, id) => {
+                if (this.isHidden(b)) return;
+                const bx = b.x || 0, by = b.y || 0;
+                const bw = b.width || 60, bh = b.height || 22;
+                const intersects = !(bx + bw < rx || bx > rx + rw || by + bh < ry || by > ry + rh);
+                if (intersects) {
+                    this.selectedBoxes.add(id);
+                    this.selectedBox = b;
+                }
+            });
+            this.updateInfo(`${this.selectedBoxes.size} object(s) selected`);
         }
 
         this.render();
@@ -1056,14 +1547,17 @@ class InteractiveEditor {
 
             this.updateInfo('Connection deleted');
             this.selectedLine = null;
-        } else if (this.selectedBox) {
-            // Delete selected box
-            this.sendMessage({
-                type: 'delete_object',
-                box_id: this.selectedBox.id
-            });
-
-            this.updateInfo(`Deleted: ${this.selectedBox.text || this.selectedBox.id}`);
+        } else if (this.selectedBoxes.size > 0) {
+            // Delete all selected boxes: one batch (one undo step) for a group,
+            // or a single delete for one box.
+            const ids = Array.from(this.selectedBoxes);
+            if (ids.length === 1) {
+                this.sendMessage({ type: 'delete_object', box_id: ids[0] });
+            } else {
+                this.sendMessage({ type: 'delete_objects', box_ids: ids });
+            }
+            this.updateInfo(`Deleted ${ids.length} object(s)`);
+            this.selectedBoxes.clear();
             this.selectedBox = null;
         } else {
             this.updateInfo('Nothing selected to delete');
@@ -1189,6 +1683,59 @@ class InteractiveEditor {
             type: 'navigate_to_root'
         });
         this.updateInfo('Navigating to root...');
+    }
+
+    navigateUp(levels) {
+        this.sendMessage({
+            type: 'navigate_up',
+            levels: levels
+        });
+        this.updateInfo(`Navigating up ${levels} level(s)...`);
+    }
+
+    renderBreadcrumb(path) {
+        /**
+         * Render the patcher path as clickable crumbs. Each ancestor jumps to
+         * that patcher: the root crumb via navigate_to_root, intermediate crumbs
+         * via navigate_up (levels from the current depth). The last crumb is the
+         * current patcher and is not clickable. Text is set via textContent so a
+         * patcher title can never inject markup.
+         */
+        const container = document.getElementById('breadcrumb-path');
+        if (!container) return;
+
+        container.textContent = '';
+        const last = path.length - 1;
+
+        path.forEach((name, i) => {
+            if (i > 0) {
+                const sep = document.createElement('span');
+                sep.className = 'breadcrumb-sep';
+                sep.textContent = ' / ';
+                container.appendChild(sep);
+            }
+
+            const crumb = document.createElement('span');
+            crumb.textContent = name || 'Untitled';
+
+            if (i === last) {
+                crumb.className = 'breadcrumb-current';
+            } else {
+                crumb.className = 'breadcrumb-link';
+                crumb.setAttribute('role', 'button');
+                crumb.title = `Go to ${name}`;
+                const levelsUp = last - i;
+                crumb.addEventListener('click', () => {
+                    if (i === 0) {
+                        this.navigateToRoot();
+                    } else {
+                        this.navigateUp(levelsUp);
+                    }
+                });
+            }
+
+            container.appendChild(crumb);
+        });
     }
 
     initializeLayoutControls() {
@@ -1487,7 +2034,8 @@ class InteractiveEditor {
             }
         });
 
-        // Re-render to show updated positions
+        // Re-frame the restored layout (drop manual zoom/pan) and re-render.
+        this.userAdjustedView = false;
         this.render();
         this.updateInfo(`Reset ${this.originalPositions.size} objects to original positions`);
     }
@@ -1497,6 +2045,10 @@ class InteractiveEditor {
             this.updateInfo('No objects to layout');
             return;
         }
+
+        // Applying a layout rearranges everything, so re-frame the result: drop
+        // any manual zoom/pan so the post-layout render auto-fits.
+        this.userAdjustedView = false;
 
         // Check which layout engine is selected
         const layoutEngine = document.getElementById('layout-engine')?.value || 'elk';
@@ -2306,16 +2858,251 @@ class InteractiveEditor {
         };
     }
 
+    getViewBox() {
+        /** Current viewBox as {x, y, w, h}, parsed from the attribute. */
+        const vbStr = this.svg.getAttribute('viewBox') || '0 0 1200 800';
+        const [x, y, w, h] = vbStr.split(/[\s,]+/).map(Number);
+        return { x, y, w, h };
+    }
+
+    setViewBox(x, y, w, h) {
+        this.svg.setAttribute('viewBox', `${x} ${y} ${w} ${h}`);
+    }
+
+    startPan(event) {
+        this.panning = true;
+        this.panStart = {
+            clientX: event.clientX,
+            clientY: event.clientY,
+            vb: this.getViewBox()
+        };
+        this.svg.style.cursor = 'grabbing';
+    }
+
+    endPan() {
+        if (!this.panning) return;
+        this.panning = false;
+        this.panStart = null;
+        // Return to the grab cursor if Space is still held, else the default.
+        this.svg.style.cursor = this.spaceDown ? 'grab' : '';
+    }
+
+    handleWheel(event) {
+        /**
+         * Zoom the viewBox toward the cursor. deltaY>0 (scroll down / pinch out)
+         * zooms out by enlarging the viewBox; the point under the cursor stays
+         * fixed. Width is clamped to keep the view usable.
+         */
+        event.preventDefault();
+        const MIN_W = 40;       // most zoomed-in (px of content across the view)
+        const MAX_W = 200000;   // most zoomed-out
+
+        const vb = this.getViewBox();
+        const pt = this.getSVGPoint(event);  // cursor in SVG coords (old viewBox)
+
+        // Exponential zoom for smooth trackpad/wheel behaviour.
+        const factor = Math.exp(event.deltaY * 0.001);
+        let newW = Math.max(MIN_W, Math.min(MAX_W, vb.w * factor));
+        const scale = newW / vb.w;
+        const newH = vb.h * scale;
+
+        // Keep the cursor's content point at the same screen position.
+        const fracX = (pt.x - vb.x) / vb.w;
+        const fracY = (pt.y - vb.y) / vb.h;
+        const nx = pt.x - fracX * newW;
+        const ny = pt.y - fracY * newH;
+
+        this.setViewBox(nx, ny, newW, newH);
+        this.userAdjustedView = true;
+    }
+
+    fitView() {
+        /** Re-engage auto-fit: frame the whole (visible) patch. Bound to "f". */
+        this.userAdjustedView = false;
+        this.updateViewBox();
+        this.updateInfo('Fit to view');
+    }
+
+    undo() {
+        this.sendMessage({ type: 'undo' });
+        this.updateInfo('Undo');
+    }
+
+    redo() {
+        this.sendMessage({ type: 'redo' });
+        this.updateInfo('Redo');
+    }
+
     createObjectDialog(x, y) {
-        const text = prompt('Enter object text:', 'newobj');
+        /**
+         * Open the create-object modal (replaces window.prompt). Remembers the
+         * canvas position so the object lands where the user double-clicked, and
+         * offers a typeahead of common Max objects.
+         */
+        const modal = document.getElementById('create-modal');
+        const input = document.getElementById('create-modal-input');
+        if (!modal || !input) return;
+
+        this._createPos = { x: x || 100, y: y || 100 };
+        input.value = '';
+        modal.hidden = false;
+        input.focus();
+    }
+
+    isCreateModalOpen() {
+        const modal = document.getElementById('create-modal');
+        return !!modal && !modal.hidden;
+    }
+
+    closeCreateModal() {
+        const modal = document.getElementById('create-modal');
+        if (modal) modal.hidden = true;
+    }
+
+    commitCreateModal() {
+        const input = document.getElementById('create-modal-input');
+        const text = (input?.value || '').trim();
         if (text) {
+            const pos = this._createPos || { x: 100, y: 100 };
             this.sendMessage({
                 type: 'create_object',
                 text: text,
-                x: x || 100,
-                y: y || 100
+                x: pos.x,
+                y: pos.y
+            });
+            this.updateInfo(`Created ${text}`);
+        }
+        this.closeCreateModal();
+    }
+
+    initializeCreateModal() {
+        // Populate the typeahead with common Max objects.
+        const datalist = document.getElementById('max-object-list');
+        if (datalist) {
+            COMMON_MAX_OBJECTS.forEach(name => {
+                const opt = document.createElement('option');
+                opt.value = name;
+                datalist.appendChild(opt);
             });
         }
+
+        const ok = document.getElementById('create-modal-ok');
+        if (ok) ok.addEventListener('click', () => this.commitCreateModal());
+        const close = document.getElementById('create-modal-close');
+        if (close) close.addEventListener('click', () => this.closeCreateModal());
+        const backdrop = document.getElementById('create-modal-backdrop');
+        if (backdrop) backdrop.addEventListener('click', () => this.closeCreateModal());
+
+        const input = document.getElementById('create-modal-input');
+        if (input) {
+            input.addEventListener('keydown', (e) => {
+                // Keep the global editor shortcuts from firing while typing here.
+                e.stopPropagation();
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    this.commitCreateModal();
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    this.closeCreateModal();
+                }
+            });
+        }
+    }
+
+    isFilePickerOpen() {
+        const modal = document.getElementById('file-picker');
+        return !!modal && !modal.hidden;
+    }
+
+    openFilePicker() {
+        /** Open the server-side file-picker modal and request a listing. */
+        const modal = document.getElementById('file-picker');
+        if (!modal) return;
+        modal.hidden = false;
+        const status = document.getElementById('file-picker-status');
+        if (status) status.textContent = 'Loading...';
+        // No directory -> the server defaults to the current patch's folder.
+        this.requestPatchList();
+    }
+
+    closeFilePicker() {
+        const modal = document.getElementById('file-picker');
+        if (modal) modal.hidden = true;
+    }
+
+    requestPatchList(directory) {
+        this.sendMessage({
+            type: 'list_patches',
+            directory: directory || ''
+        });
+    }
+
+    renderFileList(data) {
+        /**
+         * Populate the file-picker modal from a patch_list message. Directories
+         * navigate deeper on click; patch files open on the server (preserving the
+         * real path for save-back). Text is set via textContent so filesystem
+         * names cannot inject markup.
+         */
+        const pathEl = document.getElementById('file-picker-path');
+        if (pathEl) pathEl.textContent = data.directory || '';
+
+        const list = document.getElementById('file-picker-list');
+        if (!list) return;
+        list.textContent = '';
+
+        // "Up" entry to the parent directory, when not at the filesystem root.
+        if (data.parent) {
+            const up = document.createElement('li');
+            up.className = 'file-entry file-dir';
+            up.textContent = '.. (up)';
+            up.addEventListener('click', () => this.requestPatchList(data.parent));
+            list.appendChild(up);
+        }
+
+        const entries = data.entries || [];
+        if (entries.length === 0 && !data.parent) {
+            const empty = document.createElement('li');
+            empty.className = 'file-empty';
+            empty.textContent = 'No patch files or folders here.';
+            list.appendChild(empty);
+        }
+
+        entries.forEach(entry => {
+            const li = document.createElement('li');
+            li.className = 'file-entry ' + (entry.is_dir ? 'file-dir' : 'file-patch');
+            li.textContent = (entry.is_dir ? '📁 ' : '📄 ') + entry.name;
+            li.title = entry.path;
+            if (entry.is_dir) {
+                li.addEventListener('click', () => this.requestPatchList(entry.path));
+            } else {
+                li.addEventListener('click', () => this.openServerFile(entry.path));
+            }
+            list.appendChild(li);
+        });
+
+        const status = document.getElementById('file-picker-status');
+        if (status) {
+            const fileCount = entries.filter(e => !e.is_dir).length;
+            status.textContent = `${fileCount} patch file(s)`;
+        }
+    }
+
+    openServerFile(path) {
+        /** Open a patch by its real server-side path and close the picker. */
+        // Discard layout/selection state tied to the previous patch so Reset
+        // Layout does not restore positions from a different file.
+        this.originalPositions.clear();
+        this.selectedBox = null;
+        this.selectedBoxes.clear();
+        this.selectedLine = null;
+        // Force auto-fit for the newly opened patch even if it shares a title.
+        this.userAdjustedView = false;
+        this._viewPatcherKey = null;
+
+        this.sendMessage({ type: 'open', filepath: path });
+        this.updateInfo(`Opening ${path}...`);
+        this.closeFilePicker();
     }
 
     async handleFileSelected(event) {
@@ -2344,13 +3131,18 @@ class InteractiveEditor {
             // Reset Layout does not restore positions from a different file.
             this.originalPositions.clear();
             this.selectedBox = null;
+            this.selectedBoxes.clear();
             this.selectedLine = null;
+            // Force auto-fit for the newly opened patch even if it shares a title.
+            this.userAdjustedView = false;
+            this._viewPatcherKey = null;
 
             this.sendMessage({
                 type: 'open_content',
                 filename: file.name,
                 content: content
             });
+            this.closeFilePicker();  // Close the modal if the upload fallback was used
         } catch (err) {
             console.error('Could not read file:', err);
             this.updateInfo(`Could not read ${file.name}: ${err && err.message}`);

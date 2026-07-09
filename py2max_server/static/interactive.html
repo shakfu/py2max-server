@@ -83,6 +83,37 @@
             flex-shrink: 0;
         }
 
+        /* Drag-to-connect feedback */
+        .connection-preview { pointer-events: none; }
+
+        /* Compatible target ports light up during a connection drag; the one
+           under the cursor gets a stronger ring. */
+        .port.connect-compatible {
+            stroke: #ffd080;
+            stroke-width: 2px;
+        }
+        .port.connect-hover {
+            stroke: #ffffff;
+            stroke-width: 3px;
+        }
+
+        .breadcrumb-link {
+            color: #4080ff;
+            cursor: pointer;
+        }
+
+        .breadcrumb-link:hover {
+            text-decoration: underline;
+        }
+
+        .breadcrumb-current {
+            color: #ddd;
+        }
+
+        .breadcrumb-sep {
+            color: #666;
+        }
+
         #controls {
             display: flex;
             gap: 10px;
@@ -95,14 +126,15 @@
             white-space: nowrap;
         }
 
-        /* The Open control is a <label for> (so the native file dialog opens on a
-           genuine click, which Safari requires) styled to match the buttons. */
+        /* Open triggers the server-side file picker (works in Safari, preserves
+           the real path). Styled distinctly from the plain buttons. */
         #open-btn {
             display: inline-flex;
             align-items: center;
             padding: 4px 10px;
             background: #4080ff;
             color: white;
+            border: none;
             border-radius: 4px;
             cursor: pointer;
             font-size: 11px;
@@ -115,6 +147,193 @@
         #open-btn:hover {
             background: #5090ff;
         }
+
+        /* Server-side file-picker modal */
+        #file-picker[hidden] { display: none; }
+
+        #file-picker {
+            position: fixed;
+            inset: 0;
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #file-picker-backdrop {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.55);
+        }
+
+        #file-picker-dialog {
+            position: relative;
+            width: min(560px, 92vw);
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            background: #2b2b2b;
+            color: #eee;
+            border: 1px solid #555;
+            border-radius: 8px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+        }
+
+        #file-picker-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px 14px;
+            border-bottom: 1px solid #444;
+        }
+
+        #file-picker-header h2 {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        #file-picker-close {
+            background: transparent;
+            color: #bbb;
+            font-size: 18px;
+            line-height: 1;
+            padding: 2px 8px;
+        }
+
+        #file-picker-path {
+            padding: 6px 14px;
+            font-size: 11px;
+            color: #9ab;
+            word-break: break-all;
+            border-bottom: 1px solid #3a3a3a;
+        }
+
+        #file-picker-list {
+            list-style: none;
+            margin: 0;
+            padding: 6px 0;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .file-entry {
+            padding: 6px 14px;
+            font-size: 12px;
+            cursor: pointer;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .file-entry:hover { background: #3a4a66; }
+        .file-dir { color: #cfa; }
+        .file-patch { color: #eee; }
+
+        .file-empty {
+            padding: 14px;
+            font-size: 12px;
+            color: #999;
+            list-style: none;
+        }
+
+        #file-picker-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 8px 14px;
+            border-top: 1px solid #444;
+            font-size: 11px;
+            color: #999;
+        }
+
+        #file-picker-upload {
+            color: #7aa7ff;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+
+        /* Create-object modal (shares the file-picker's visual language) */
+        #create-modal[hidden] { display: none; }
+
+        #create-modal {
+            position: fixed;
+            inset: 0;
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #create-modal-backdrop {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.55);
+        }
+
+        #create-modal-dialog {
+            position: relative;
+            width: min(420px, 92vw);
+            background: #2b2b2b;
+            color: #eee;
+            border: 1px solid #555;
+            border-radius: 8px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+        }
+
+        #create-modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 14px;
+            border-bottom: 1px solid #444;
+        }
+
+        #create-modal-header h2 { margin: 0; font-size: 14px; font-weight: 600; }
+
+        #create-modal-close {
+            background: transparent;
+            color: #bbb;
+            font-size: 18px;
+            line-height: 1;
+            padding: 2px 8px;
+        }
+
+        #create-modal-body { padding: 14px; }
+
+        #create-modal-input {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 8px 10px;
+            font-size: 13px;
+            background: #1f1f1f;
+            color: #fff;
+            border: 1px solid #666;
+            border-radius: 4px;
+        }
+
+        #create-modal-input:focus { outline: none; border-color: #4080ff; }
+
+        #create-modal-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 8px 14px 12px;
+        }
+
+        .create-modal-hint { font-size: 11px; color: #999; }
+
+        #create-modal-ok {
+            background: #4080ff;
+            color: #fff;
+            border: none;
+        }
+        #create-modal-ok:hover { background: #5090ff; }
 
         button {
             padding: 4px 10px;
@@ -271,7 +490,9 @@
 
         .port {
             cursor: pointer;
-            transition: all 0.15s ease;
+            /* Only transition the hover/state colours -- NOT position (cx/cy),
+               or ports lag behind the box during a drag. */
+            transition: fill 0.15s ease, stroke 0.15s ease, stroke-width 0.15s ease;
         }
 
         .inlet:hover {
@@ -567,10 +788,13 @@
         <div id="controls">
             <button id="toggle-layout-mode-btn" title="Toggle between panel and sidebar layout">📋 Panel Mode</button>
             <button id="parent-btn" title="Go to parent patcher (ESC)">⬆️ Parent</button>
+            <button id="fit-view-btn" title="Fit patch to view (F). Wheel to zoom, Space-drag to pan.">⤢ Fit</button>
             <button id="auto-layout-btn" title="Auto-arrange objects (layout engine is configurable)">🔄 Auto-Layout</button>
             <button id="toggle-comments-btn" title="Hide/show comment annotation nodes (does not delete them)">Hide Comments</button>
-            <label id="open-btn" for="file-input" title="Open a .maxpat file from disk">📂 Open</label>
+            <button id="open-btn" title="Open a .maxpat file from the server">📂 Open</button>
             <button id="save-btn" title="Save patch to .maxpat file">💾 Save</button>
+            <button id="undo-btn" title="Undo (Cmd/Ctrl-Z)">↶ Undo</button>
+            <button id="redo-btn" title="Redo (Cmd/Ctrl-Shift-Z)">↷ Redo</button>
             <button id="create-btn" title="Create new object">+ Object</button>
             <div id="status" class="disconnected">
                 <span class="status-text">Connecting...</span>
@@ -700,9 +924,50 @@
         <button id="reset-layout-btn" style="margin-top: 14px;">Reset Layout</button>
     </div>
 
-    <!-- Native file picker driven by the Open button. Kept rendered but
-         visually hidden off-screen: Safari ignores .click() on a
-         display:none file input, so we can't hide it that way. -->
+    <!-- Server-side file picker modal. Lists patch files/folders on the server
+         so Open works in Safari and preserves the real path for save-back. -->
+    <div id="file-picker" hidden>
+        <div id="file-picker-backdrop"></div>
+        <div id="file-picker-dialog" role="dialog" aria-modal="true" aria-label="Open a patch">
+            <div id="file-picker-header">
+                <h2>Open a patch</h2>
+                <button id="file-picker-close" title="Close (Esc)">&times;</button>
+            </div>
+            <div id="file-picker-path"></div>
+            <ul id="file-picker-list"></ul>
+            <div id="file-picker-footer">
+                <span id="file-picker-status"></span>
+                <label id="file-picker-upload" for="file-input"
+                       title="Upload from this browser instead (fallback)">Upload from browser</label>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create-object modal (replaces window.prompt): a text field with a
+         typeahead of common Max objects. -->
+    <div id="create-modal" hidden>
+        <div id="create-modal-backdrop"></div>
+        <div id="create-modal-dialog" role="dialog" aria-modal="true" aria-label="Create object">
+            <div id="create-modal-header">
+                <h2>New object</h2>
+                <button id="create-modal-close" title="Cancel (Esc)">&times;</button>
+            </div>
+            <div id="create-modal-body">
+                <input id="create-modal-input" type="text" list="max-object-list"
+                       placeholder="Object name, e.g. cycle~ 440" autocomplete="off"
+                       spellcheck="false">
+                <datalist id="max-object-list"></datalist>
+            </div>
+            <div id="create-modal-footer">
+                <span class="create-modal-hint">Enter to create, Esc to cancel</span>
+                <button id="create-modal-ok">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Native upload input, used as a fallback via the picker's "Upload from
+         browser" link. Kept rendered but hidden off-screen: Safari ignores
+         .click() on a display:none file input, so we can't hide it that way. -->
     <input type="file" id="file-input"
            accept=".maxpat,.maxhelp,.amxd,.json,application/json"
            style="position: absolute; width: 1px; height: 1px;

@@ -59,11 +59,17 @@ MESSAGE_SCHEMAS: dict[str, dict[str, type | tuple[type, ...]]] = {
     "save_as": {"filepath": str},
     "open": {"filepath": str},  # Open a file by server-side path
     "open_content": {"filename": str, "content": str},  # Open uploaded file text
+    "list_patches": {},  # List patch files/dirs for the server-side file picker
     "export_patch": {},  # Request serialized patch text for client-side Save As
     "edit_object_text": {"box_id": str, "text": str},  # Rename/edit an object
     "navigate_to_subpatcher": {"box_id": str},
     "navigate_to_parent": {},
     "navigate_to_root": {},
+    "navigate_up": {"levels": int},  # Ascend N parents in one step (breadcrumb)
+    "undo": {},
+    "redo": {},
+    "update_positions": {"positions": list},  # Batch move (multi-select group drag)
+    "delete_objects": {"box_ids": list},  # Batch delete (multi-select)
 }
 
 # Maximum lengths for string fields to prevent abuse
@@ -78,6 +84,9 @@ MAX_STRING_LENGTHS: dict[str, int] = {
 
 # Maximum size for an uploaded patch payload (bytes/chars of JSON text).
 MAX_CONTENT_LENGTH = 16 * 1024 * 1024
+
+# File extensions the server-side file picker treats as openable patches.
+PATCH_EXTENSIONS = (".maxpat", ".maxhelp", ".amxd", ".rbnopat")
 
 # Coordinate bounds
 COORDINATE_BOUNDS = {"min": -100000, "max": 100000}
@@ -96,6 +105,78 @@ def _coerce_patcher_rect(patcher: Any) -> None:
         from py2max.core.common import Rect
 
         patcher.rect = Rect(*rect)
+
+
+# maxclasses that are not Max objects (message/comment/UI containers) -> no maxref.
+_NO_MAXREF_CLASSES = {"message", "comment"}
+# Placeholder port types the maxref parser leaves un-substituted; not useful labels.
+_PLACEHOLDER_TYPES = {"INLET_TYPE", "OUTLET_TYPE", ""}
+# Cache maxref lookups by object name (values: {"inlets": [...], "outlets": [...]}
+# or None when the object has no usable maxref entry).
+_PORT_LABEL_CACHE: dict[str, Optional[dict]] = {}
+
+
+def _label_from_entry(entry: dict) -> str:
+    """Best human label for one inlet/outlet: prefer the digest, else the type."""
+    if not isinstance(entry, dict):
+        return ""
+    digest = (entry.get("digest") or "").strip()
+    if digest:
+        return digest
+    port_type = (entry.get("type") or "").strip()
+    if port_type not in _PLACEHOLDER_TYPES:
+        return port_type
+    return ""
+
+
+def _port_labels_for_object(objname: str) -> Optional[dict]:
+    """Return {"inlets": [str...], "outlets": [str...]} from maxref, or None.
+
+    Results (including misses) are cached per object name. Any missing/placeholder
+    label becomes an empty string so the client can fall back to a generic name.
+    """
+    if not objname:
+        return None
+    if objname in _PORT_LABEL_CACHE:
+        return _PORT_LABEL_CACHE[objname]
+
+    labels: Optional[dict] = None
+    try:
+        from py2max import maxref
+
+        info = maxref.get_object_info(objname)
+        if isinstance(info, dict):
+            inlets = info.get("inlets") or []
+            outlets = info.get("outlets") or []
+            in_labels = [_label_from_entry(e) for e in inlets]
+            out_labels = [_label_from_entry(e) for e in outlets]
+            if any(in_labels) or any(out_labels):
+                labels = {"inlets": in_labels, "outlets": out_labels}
+    except Exception:
+        labels = None
+
+    _PORT_LABEL_CACHE[objname] = labels
+    return labels
+
+
+def _object_name_from_box(text: str, maxclass: str) -> str:
+    """Resolve the Max object name used for a maxref lookup.
+
+    Text boxes carry the object in their text ("cycle~ 440" -> "cycle~"); UI
+    objects carry it in maxclass ("number", "gain~"). Non-object boxes return "".
+    """
+    if maxclass in _NO_MAXREF_CLASSES:
+        return ""
+    text = (text or "").strip()
+    if text:
+        return text.split()[0]
+    return maxclass or ""
+
+
+def _sized_labels(labels: list, count: int) -> list:
+    """Pad/truncate a label list to exactly ``count`` entries (missing -> "")."""
+    out = [labels[i] if i < len(labels) else "" for i in range(max(0, count))]
+    return out
 
 
 # Browsers to try, in order, before falling back to the OS default. Chrome is
@@ -300,6 +381,18 @@ def get_patcher_state_json(patcher: Optional["Patcher"]) -> dict:
 
         box_data["outlet_count"] = outlet_count or 0
 
+        # Attach maxref-derived port labels (for hover tooltips) when available.
+        # Sized to the actual port counts; empty strings where maxref has nothing.
+        objname = _object_name_from_box(box_data["text"], box_data["maxclass"])
+        labels = _port_labels_for_object(objname)
+        if labels is not None:
+            box_data["inlet_labels"] = _sized_labels(
+                labels["inlets"], box_data["inlet_count"]
+            )
+            box_data["outlet_labels"] = _sized_labels(
+                labels["outlets"], box_data["outlet_count"]
+            )
+
         boxes.append(box_data)
 
     lines = []
@@ -420,6 +513,9 @@ class InteractiveHTTPHandler(http.server.SimpleHTTPRequestHandler):
 class InteractiveWebSocketHandler:
     """WebSocket handler for interactive patcher editing with authentication."""
 
+    #: Cap on retained undo/redo snapshots (each is a full patch serialization).
+    MAX_HISTORY = 30
+
     def __init__(self, patcher: Optional["Patcher"], auto_save: bool = False):
         self.root_patcher = patcher  # Keep reference to root patcher
         self.patcher = patcher  # Current patcher being viewed
@@ -427,6 +523,14 @@ class InteractiveWebSocketHandler:
         self._lock = asyncio.Lock()
         self._save_task: Optional[asyncio.Task[Any]] = None  # Track pending save task
         self.auto_save = auto_save  # Auto-save configuration
+        # Undo/redo history. Each entry is a full snapshot of the root patcher
+        # plus the current view path, so any mutation (single or batch, at any
+        # subpatcher depth) is reversible without per-op inverse logic.
+        self.undo_stack: list[dict] = []
+        self.redo_stack: list[dict] = []
+        # Current view as a list of subpatcher box ids from the root, so the view
+        # can be re-derived after a snapshot restore rebuilds the patcher tree.
+        self.view_path: list[str] = []
         # Generate a secure session token
         self.session_token = secrets.token_urlsafe(32)
         print(f"WebSocket session token: {self.session_token}")
@@ -565,6 +669,8 @@ class InteractiveWebSocketHandler:
                 await self.handle_open(data)
             elif message_type == "open_content":
                 await self.handle_open_content(data)
+            elif message_type == "list_patches":
+                await self.handle_list_patches(websocket, data)
             elif message_type == "export_patch":
                 await self.handle_export_patch(websocket)
             elif message_type == "edit_object_text":
@@ -575,6 +681,16 @@ class InteractiveWebSocketHandler:
                 await self.handle_navigate_to_parent()
             elif message_type == "navigate_to_root":
                 await self.handle_navigate_to_root()
+            elif message_type == "navigate_up":
+                await self.handle_navigate_up(data)
+            elif message_type == "undo":
+                await self.handle_undo()
+            elif message_type == "redo":
+                await self.handle_redo()
+            elif message_type == "update_positions":
+                await self.handle_update_positions(data)
+            elif message_type == "delete_objects":
+                await self.handle_delete_objects(data)
 
         except json.JSONDecodeError as e:
             print(f"Invalid JSON: {e}")
@@ -599,6 +715,7 @@ class InteractiveWebSocketHandler:
         # Find box and update position
         for box in self.patcher._boxes:
             if box.id == box_id:
+                self._push_undo()
                 # Update position
                 if hasattr(box, "patching_rect"):
                     rect = box.patching_rect
@@ -668,6 +785,8 @@ class InteractiveWebSocketHandler:
         x = data.get("x", 100)
         y = data.get("y", 100)
 
+        self._push_undo()
+
         # Create new object
         box = self.patcher.add_textbox(text)
 
@@ -711,6 +830,7 @@ class InteractiveWebSocketHandler:
                 dst_box = box
 
         if src_box and dst_box:
+            self._push_undo()
             # Create connection
             self.patcher.add_line(src_box, dst_box, outlet=src_outlet, inlet=dst_inlet)  # type: ignore[arg-type]
 
@@ -731,6 +851,7 @@ class InteractiveWebSocketHandler:
         # Find and remove box
         for i, box in enumerate(self.patcher._boxes):
             if box.id == box_id:
+                self._push_undo()
                 self.patcher._boxes.pop(i)
 
                 # Also remove any connected lines
@@ -768,6 +889,7 @@ class InteractiveWebSocketHandler:
                 and source[1] == src_outlet
                 and destination[1] == dst_inlet
             ):
+                self._push_undo()
                 self.patcher._lines.pop(i)
 
                 # Broadcast update to all clients
@@ -883,10 +1005,97 @@ class InteractiveWebSocketHandler:
         # Swap in the newly loaded patcher as both root and current view.
         self.root_patcher = patcher
         self.patcher = patcher
+        self._reset_view_and_history()
         print(f"Opened: {filepath}")
 
         state = get_patcher_state_json(self.patcher)
         await self.broadcast(state)
+
+    def _default_listing_dir(self) -> Path:
+        """Directory the file picker shows first.
+
+        Prefer the folder of the currently-loaded patch (so Open starts where the
+        user is working); fall back to the process working directory.
+        """
+        path = None
+        if self.root_patcher is not None:
+            path = getattr(self.root_patcher, "_path", None) or getattr(
+                self.root_patcher, "filepath", None
+            )
+        if path:
+            try:
+                parent = Path(str(path)).expanduser().resolve().parent
+                if parent.is_dir():
+                    return parent
+            except (OSError, ValueError):
+                pass
+        return Path.cwd()
+
+    async def handle_list_patches(
+        self, websocket: ServerConnection, data: dict
+    ) -> None:
+        """List patch files and subdirectories for the server-side file picker.
+
+        Replies to the requesting client only (not a broadcast) with the resolved
+        directory, its parent (for "up" navigation), and the entries: openable
+        patch files plus subdirectories to descend into. This avoids the browser
+        file API entirely -- which fixes Open in Safari -- and preserves the real
+        filesystem path so the opened patch can be saved back in place.
+        """
+        requested = data.get("directory")
+        try:
+            if isinstance(requested, str) and requested.strip():
+                base = Path(requested).expanduser().resolve()
+                if not base.is_dir():
+                    base = self._default_listing_dir()
+            else:
+                base = self._default_listing_dir()
+        except (OSError, ValueError):
+            base = self._default_listing_dir()
+
+        try:
+            children = list(base.iterdir())
+        except (OSError, PermissionError) as e:
+            await websocket.send(
+                json.dumps(
+                    {
+                        "type": "patch_list_error",
+                        "message": f"Cannot read directory: {e}",
+                    }
+                )
+            )
+            return
+
+        dirs: list[dict] = []
+        files: list[dict] = []
+        for child in children:
+            name = child.name
+            if name.startswith("."):
+                continue  # Skip hidden entries
+            try:
+                if child.is_dir():
+                    dirs.append({"name": name, "path": str(child), "is_dir": True})
+                elif child.is_file() and child.suffix.lower() in PATCH_EXTENSIONS:
+                    files.append({"name": name, "path": str(child), "is_dir": False})
+            except OSError:
+                continue  # Broken symlink or otherwise unreadable entry
+
+        dirs.sort(key=lambda e: e["name"].lower())
+        files.sort(key=lambda e: e["name"].lower())
+
+        # No parent entry when already at the filesystem root.
+        parent = None if base.parent == base else str(base.parent)
+
+        await websocket.send(
+            json.dumps(
+                {
+                    "type": "patch_list",
+                    "directory": str(base),
+                    "parent": parent,
+                    "entries": dirs + files,
+                }
+            )
+        )
 
     async def handle_open_content(self, data: dict):
         """Handle a patch opened from uploaded file contents (browser file picker).
@@ -919,6 +1128,7 @@ class InteractiveWebSocketHandler:
         # Swap in the newly loaded patcher as both root and current view.
         self.root_patcher = patcher
         self.patcher = patcher
+        self._reset_view_and_history()
         print(f"Opened (uploaded): {filename}")
 
         state = get_patcher_state_json(self.patcher)
@@ -971,6 +1181,7 @@ class InteractiveWebSocketHandler:
 
         for box in self.patcher._boxes:
             if box.id == box_id:
+                self._push_undo()
                 # Box.text is a read-only property backed by __dict__["text"]
                 # (file-loaded) or _kwds["text"] (programmatic). Update both so
                 # the getter and serialization agree.
@@ -1000,6 +1211,7 @@ class InteractiveWebSocketHandler:
                 if hasattr(box, "subpatcher") and box.subpatcher is not None:
                     # Navigate to subpatcher
                     self.patcher = box.subpatcher
+                    self.view_path.append(box.id)
                     box_text = getattr(box, "text", box.id)
                     print(f"Navigated to subpatcher: {box_text}")
 
@@ -1017,6 +1229,8 @@ class InteractiveWebSocketHandler:
         parent = getattr(self.patcher, "_parent", None)
         if parent:
             self.patcher = parent
+            if self.view_path:
+                self.view_path.pop()
             print("Navigated to parent patcher")
 
             # Send updated state to all clients
@@ -1031,11 +1245,205 @@ class InteractiveWebSocketHandler:
             return
 
         self.patcher = self.root_patcher
+        self.view_path = []
         print("Navigated to root patcher")
 
         # Send updated state to all clients
         state = get_patcher_state_json(self.patcher)
         await self.broadcast(state)
+
+    async def handle_navigate_up(self, data: dict):
+        """Ascend ``levels`` parent patchers in a single step.
+
+        Used by the clickable breadcrumb to jump to an arbitrary ancestor without
+        firing one message per level. Walking stops early at the root, so an
+        over-large ``levels`` is harmless.
+        """
+        if not self.patcher:
+            return
+
+        levels = data.get("levels", 0)
+        target = self.patcher
+        for _ in range(max(0, int(levels))):
+            parent = getattr(target, "_parent", None)
+            if parent is None:
+                break
+            target = parent
+
+        if target is not self.patcher:
+            self.patcher = target
+            # Trim the resolved view path by the same number of levels.
+            trim = min(max(0, int(levels)), len(self.view_path))
+            if trim:
+                self.view_path = self.view_path[:-trim]
+            print(f"Navigated up {levels} level(s)")
+            state = get_patcher_state_json(self.patcher)
+            await self.broadcast(state)
+
+    # ------------------------------------------------------------------ #
+    # Undo/redo (server-side snapshots)
+    # ------------------------------------------------------------------ #
+
+    def _resolve_view(self, path: list[str]) -> tuple[Any, list[str]]:
+        """Walk ``path`` (subpatcher box ids) from the root to a live patcher.
+
+        Returns the deepest reachable patcher and the portion of the path that
+        resolved. Stops early if a hop no longer exists (e.g. an undo removed the
+        subpatcher we were inside), so the view falls back to the nearest
+        surviving ancestor rather than dangling.
+        """
+        patcher = self.root_patcher
+        resolved: list[str] = []
+        for box_id in path:
+            found = None
+            for box in getattr(patcher, "_boxes", []):
+                if box.id == box_id and getattr(box, "subpatcher", None) is not None:
+                    found = box.subpatcher
+                    break
+            if found is None:
+                break
+            patcher = found
+            resolved.append(box_id)
+        return patcher, resolved
+
+    def _reset_view_and_history(self) -> None:
+        """Reset view path and clear undo/redo (e.g. after opening a new file)."""
+        self.view_path = []
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+
+    def _snapshot(self) -> Optional[dict]:
+        """Capture the root patcher + current view as a restorable snapshot."""
+        if self.root_patcher is None:
+            return None
+        return {
+            "json": self.root_patcher.to_json(),
+            "view_path": list(self.view_path),
+        }
+
+    def _restore_snapshot(self, snap: dict) -> None:
+        """Replace the patcher tree from a snapshot and re-derive the view."""
+        from py2max import Patcher
+
+        # Preserve the on-disk path: to_json() does not carry it, so a naive
+        # restore would lose where Save writes to.
+        old_path = getattr(self.root_patcher, "_path", None)
+
+        maxpat = json.loads(snap["json"])
+        if isinstance(maxpat, dict) and "patcher" in maxpat:
+            patcher_dict = maxpat["patcher"]
+        else:
+            patcher_dict = maxpat
+        patcher = Patcher.from_dict(patcher_dict)
+        _coerce_patcher_rect(patcher)
+
+        if old_path is not None:
+            patcher._path = old_path
+
+        self.root_patcher = patcher
+        self.patcher, self.view_path = self._resolve_view(list(snap.get("view_path", [])))
+
+    def _push_undo(self) -> None:
+        """Record the current state before a mutation; clears the redo stack."""
+        snap = self._snapshot()
+        if snap is None:
+            return
+        self.undo_stack.append(snap)
+        if len(self.undo_stack) > self.MAX_HISTORY:
+            self.undo_stack.pop(0)
+        self.redo_stack.clear()
+
+    async def handle_undo(self) -> None:
+        """Restore the previous snapshot (no-op if the undo stack is empty)."""
+        if not self.undo_stack:
+            print("Nothing to undo")
+            return
+        current = self._snapshot()
+        if current is not None:
+            self.redo_stack.append(current)
+            if len(self.redo_stack) > self.MAX_HISTORY:
+                self.redo_stack.pop(0)
+        self._restore_snapshot(self.undo_stack.pop())
+        print("Undo")
+        await self.broadcast(get_patcher_state_json(self.patcher))
+        await self.schedule_save()
+
+    async def handle_redo(self) -> None:
+        """Re-apply the most recently undone snapshot."""
+        if not self.redo_stack:
+            print("Nothing to redo")
+            return
+        current = self._snapshot()
+        if current is not None:
+            self.undo_stack.append(current)
+            if len(self.undo_stack) > self.MAX_HISTORY:
+                self.undo_stack.pop(0)
+        self._restore_snapshot(self.redo_stack.pop())
+        print("Redo")
+        await self.broadcast(get_patcher_state_json(self.patcher))
+        await self.schedule_save()
+
+    # ------------------------------------------------------------------ #
+    # Batch mutations (used by multi-select group move/delete)
+    # ------------------------------------------------------------------ #
+
+    async def handle_update_positions(self, data: dict) -> None:
+        """Move several boxes at once (one undo step for the whole group)."""
+        if not self.patcher:
+            return
+        positions = data.get("positions") or []
+        if not isinstance(positions, list) or not positions:
+            return
+
+        by_id = {p.get("box_id"): p for p in positions if isinstance(p, dict)}
+        boxes = [b for b in self.patcher._boxes if b.id in by_id]
+        if not boxes:
+            return
+
+        self._push_undo()
+        from py2max.core.common import Rect
+
+        for box in boxes:
+            p = by_id[box.id]
+            x = p.get("x")
+            y = p.get("y")
+            if hasattr(box, "patching_rect"):
+                rect = box.patching_rect
+                if hasattr(rect, "x"):
+                    box.patching_rect = Rect(
+                        float(x) if x is not None else 0.0,
+                        float(y) if y is not None else 0.0,
+                        rect.w,
+                        rect.h,
+                    )
+                elif isinstance(rect, list):
+                    rect[0] = x
+                    rect[1] = y
+
+        await self.broadcast(get_patcher_state_json(self.patcher))
+        await self.schedule_save()
+
+    async def handle_delete_objects(self, data: dict) -> None:
+        """Delete several boxes (and their lines) at once as one undo step."""
+        if not self.patcher:
+            return
+        box_ids = data.get("box_ids") or []
+        if not isinstance(box_ids, list) or not box_ids:
+            return
+        targets = {bid for bid in box_ids if isinstance(bid, str)}
+        present = [b for b in self.patcher._boxes if b.id in targets]
+        if not present:
+            return
+
+        self._push_undo()
+        self.patcher._boxes = [b for b in self.patcher._boxes if b.id not in targets]
+        self.patcher._lines = [
+            line
+            for line in self.patcher._lines
+            if line.src not in targets and line.dst not in targets
+        ]
+        await self.broadcast(get_patcher_state_json(self.patcher))
+        await self.schedule_save()
 
     async def notify_update(self):
         """Notify all clients of a patcher update."""

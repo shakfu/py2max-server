@@ -147,6 +147,79 @@ async def test_handler_navigate_to_root():
 
 
 @pytest.mark.asyncio
+async def test_handler_navigate_up_levels():
+    """navigate_up ascends the given number of parents in one step."""
+    p = Patcher("test.maxpat", title="Main")
+    sub_box1 = p.add_subpatcher("p level1")
+    sub1 = sub_box1.subpatcher
+    sub_box2 = sub1.add_subpatcher("p level2")
+    sub2 = sub_box2.subpatcher
+
+    handler = InteractiveWebSocketHandler(p)
+
+    await handler.handle_navigate_to_subpatcher({"box_id": sub_box1.id})
+    await handler.handle_navigate_to_subpatcher({"box_id": sub_box2.id})
+    assert handler.patcher is sub2
+
+    # Ascend one level -> level1
+    await handler.handle_navigate_up({"levels": 1})
+    assert handler.patcher is sub1
+
+    # Ascend one more -> root
+    await handler.handle_navigate_up({"levels": 1})
+    assert handler.patcher is p
+
+
+@pytest.mark.asyncio
+async def test_handler_navigate_up_multiple_levels():
+    """navigate_up with levels spanning multiple parents lands on the ancestor."""
+    p = Patcher("test.maxpat", title="Main")
+    sub_box1 = p.add_subpatcher("p level1")
+    sub1 = sub_box1.subpatcher
+    sub_box2 = sub1.add_subpatcher("p level2")
+    sub2 = sub_box2.subpatcher
+
+    handler = InteractiveWebSocketHandler(p)
+    await handler.handle_navigate_to_subpatcher({"box_id": sub_box1.id})
+    await handler.handle_navigate_to_subpatcher({"box_id": sub_box2.id})
+    assert handler.patcher is sub2
+
+    # Two levels up from level2 -> root
+    await handler.handle_navigate_up({"levels": 2})
+    assert handler.patcher is p
+
+
+@pytest.mark.asyncio
+async def test_handler_navigate_up_stops_at_root():
+    """navigate_up past the root clamps at the root instead of erroring."""
+    p = Patcher("test.maxpat", title="Main")
+    sub_box1 = p.add_subpatcher("p level1")
+    sub1 = sub_box1.subpatcher
+
+    handler = InteractiveWebSocketHandler(p)
+    await handler.handle_navigate_to_subpatcher({"box_id": sub_box1.id})
+    assert handler.patcher is sub1
+
+    # Ask for more levels than exist -> lands on root, no crash
+    await handler.handle_navigate_up({"levels": 99})
+    assert handler.patcher is p
+
+
+@pytest.mark.asyncio
+async def test_handler_navigate_up_zero_is_noop():
+    """navigate_up with zero levels stays put."""
+    p = Patcher("test.maxpat", title="Main")
+    sub_box1 = p.add_subpatcher("p level1")
+    sub1 = sub_box1.subpatcher
+
+    handler = InteractiveWebSocketHandler(p)
+    await handler.handle_navigate_to_subpatcher({"box_id": sub_box1.id})
+
+    await handler.handle_navigate_up({"levels": 0})
+    assert handler.patcher is sub1
+
+
+@pytest.mark.asyncio
 async def test_handler_navigate_nonexistent_subpatcher():
     """Test that navigating to non-existent subpatcher doesn't crash."""
     p = Patcher("test.maxpat")
