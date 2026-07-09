@@ -729,7 +729,9 @@ class TestPortLabels:
     def test_label_from_entry_prefers_digest_then_type(self):
         from py2max_server.websocket import _label_from_entry
 
-        assert _label_from_entry({"digest": "Frequency", "type": "signal"}) == "Frequency"
+        assert (
+            _label_from_entry({"digest": "Frequency", "type": "signal"}) == "Frequency"
+        )
         assert _label_from_entry({"digest": "", "type": "signal"}) == "signal"
         # Placeholder types are suppressed to empty.
         assert _label_from_entry({"digest": "", "type": "INLET_TYPE"}) == ""

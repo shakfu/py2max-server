@@ -322,7 +322,7 @@ def get_patcher_state_json(patcher: Optional["Patcher"]) -> dict:
 
     boxes = []
     for box in patcher._boxes:
-        box_data = {
+        box_data: dict[str, Any] = {
             "id": getattr(box, "id", ""),
             "text": getattr(box, "text", ""),
             "maxclass": getattr(box, "maxclass", "newobj"),
@@ -1211,7 +1211,9 @@ class InteractiveWebSocketHandler:
                 if hasattr(box, "subpatcher") and box.subpatcher is not None:
                     # Navigate to subpatcher
                     self.patcher = box.subpatcher
-                    self.view_path.append(box.id)
+                    # box_id (validated str) equals box.id here; use it so the
+                    # path stays list[str] (box.id is typed Optional).
+                    self.view_path.append(box_id)
                     box_text = getattr(box, "text", box.id)
                     print(f"Navigated to subpatcher: {box_text}")
 
@@ -1341,7 +1343,9 @@ class InteractiveWebSocketHandler:
             patcher._path = old_path
 
         self.root_patcher = patcher
-        self.patcher, self.view_path = self._resolve_view(list(snap.get("view_path", [])))
+        self.patcher, self.view_path = self._resolve_view(
+            list(snap.get("view_path", []))
+        )
 
     def _push_undo(self) -> None:
         """Record the current state before a mutation; clears the redo stack."""
