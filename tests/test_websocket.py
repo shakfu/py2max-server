@@ -746,8 +746,9 @@ class TestPortLabels:
         box = state["boxes"][0]
 
         assert box["inlet_labels"] == ["Frequency", "Phase (0-1)"]
-        # Outlet has no digest -> falls back to its type.
-        assert box["outlet_labels"] == ["signal"]
+        # Outlet digest ("Output") wins over its type ("signal"), per the
+        # digest-first rule in test_label_from_entry_prefers_digest_then_type.
+        assert box["outlet_labels"] == ["Output"]
         # Labels are sized to the port counts.
         assert len(box["inlet_labels"]) == box["inlet_count"]
         assert len(box["outlet_labels"]) == box["outlet_count"]
