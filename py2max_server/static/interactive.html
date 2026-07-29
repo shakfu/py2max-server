@@ -8,6 +8,9 @@
     <style>
         :root {
             --header-height: 60px;
+            /* Sidebar width, adjustable by dragging its left edge. The JS
+               rewrites this on drag and restores it from localStorage. */
+            --sidebar-width: 280px;
         }
 
         * {
@@ -555,8 +558,8 @@
         body.sidebar-mode #layout-controls {
             position: fixed;
             top: var(--header-height);
-            right: -280px;
-            width: 280px;
+            right: calc(-1 * var(--sidebar-width));
+            width: var(--sidebar-width);
             height: auto;
             /* Size to content, but never taller than the viewport (scroll if so). */
             max-height: calc(100vh - var(--header-height));
@@ -564,7 +567,9 @@
             flex-wrap: nowrap;
             overflow-y: auto;
             border-bottom: none;
-            border-left: 2px solid #4080ff;
+            /* No accent border on the leading edge -- the drop shadow below is
+               enough to separate the panel from the canvas. */
+            border-left: none;
             box-shadow: -2px 0 8px rgba(0,0,0,0.3);
             z-index: 100;
             transition: right 0.3s ease;
@@ -582,7 +587,44 @@
         }
 
         body.sidebar-mode.controls-visible #canvas {
-            padding-right: 300px;
+            padding-right: calc(var(--sidebar-width) + 20px);
+        }
+
+        /* Drag handle on the sidebar's left edge. Fixed rather than absolute:
+           #layout-controls scrolls its own overflow, and an absolute child
+           would scroll away with the content. */
+        #sidebar-resize-handle {
+            display: none;
+        }
+
+        body.sidebar-mode.controls-visible #sidebar-resize-handle {
+            display: block;
+            position: fixed;
+            top: var(--header-height);
+            right: var(--sidebar-width);
+            width: 7px;
+            margin-right: -3px;
+            height: calc(100vh - var(--header-height));
+            cursor: ew-resize;
+            background: transparent;
+            z-index: 101;
+        }
+
+        body.sidebar-mode.controls-visible #sidebar-resize-handle:hover,
+        body.sidebar-mode.controls-visible #sidebar-resize-handle.dragging {
+            background: rgba(64, 128, 255, 0.5);
+        }
+
+        /* While dragging, stop the pointer selecting text or the transition
+           fighting the live width updates. */
+        body.resizing-sidebar {
+            user-select: none;
+            cursor: ew-resize;
+        }
+
+        body.resizing-sidebar #layout-controls,
+        body.resizing-sidebar #canvas {
+            transition: none;
         }
 
         body.sidebar-mode #layout-controls .control-group {
@@ -616,10 +658,28 @@
             opacity: 0;
         }
 
+        /* Two columns so a slider and its readout share one row; everything
+           else (labels, selects, checkboxes) spans both. Previously this was a
+           plain column flex, which dropped the value under the slider and hard
+           against the left edge. */
         .control-group {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
+            display: grid;
+            grid-template-columns: 1fr auto;
+            align-items: center;
+            gap: 2px 8px;
+        }
+
+        .control-group > * {
+            grid-column: 1 / -1;
+        }
+
+        .control-group > input[type="range"] {
+            grid-column: 1;
+        }
+
+        .control-group > .value-display {
+            grid-column: 2;
+            text-align: right;
         }
 
         .control-group label {
@@ -630,7 +690,10 @@
         }
 
         .control-group input[type="range"] {
-            width: 120px;
+            /* Fill the column so the slider grows with the sidebar, but keep a
+               floor so the toolbar (panel) mode still looks right. */
+            width: 100%;
+            min-width: 120px;
             height: 4px;
             background: #444;
             outline: none;
@@ -789,10 +852,11 @@
             <button id="toggle-layout-mode-btn" title="Toggle between panel and sidebar layout">📋 Panel Mode</button>
             <button id="parent-btn" title="Go to parent patcher (ESC)">⬆️ Parent</button>
             <button id="fit-view-btn" title="Fit patch to view (F). Wheel to zoom, Space-drag to pan.">⤢ Fit</button>
-            <button id="auto-layout-btn" title="Auto-arrange objects (layout engine is configurable)">🔄 Auto-Layout</button>
+            <button id="auto-layout-btn" title="Show layout options (nothing moves until you press Apply Layout)">🔄 Auto-Layout</button>
             <button id="toggle-comments-btn" title="Hide/show comment annotation nodes (does not delete them)">Hide Comments</button>
             <button id="open-btn" title="Open a .maxpat file from the server">📂 Open</button>
-            <button id="save-btn" title="Save patch to .maxpat file">💾 Save</button>
+            <button id="save-btn" title="Save back to the file being served">💾 Save</button>
+            <button id="save-as-btn" title="Save a copy elsewhere via a browser file dialog">Save As</button>
             <button id="undo-btn" title="Undo (Cmd/Ctrl-Z)">↶ Undo</button>
             <button id="redo-btn" title="Redo (Cmd/Ctrl-Shift-Z)">↷ Redo</button>
             <button id="create-btn" title="Create new object">+ Object</button>
@@ -801,6 +865,8 @@
             </div>
         </div>
     </div>
+
+    <div id="sidebar-resize-handle" title="Drag to resize the sidebar (double-click to reset)"></div>
 
     <div id="layout-controls">
         <!-- Primary controls: enough for a good layout with the compact defaults. -->
@@ -820,6 +886,16 @@
                 <option value="x-reverse">Horizontal (Right-to-Left)</option>
                 <option value="y" selected>Vertical (Top-to-Bottom)</option>
                 <option value="y-reverse">Vertical (Bottom-to-Top)</option>
+            </select>
+        </div>
+
+        <!-- Rendering preference, not a layout parameter: unlike the controls
+             above it takes effect immediately, without pressing Apply Layout. -->
+        <div class="control-group param-shared">
+            <label>Port Placement</label>
+            <select id="port-placement" title="How inlets/outlets are spaced along a box edge. Applies immediately." style="padding: 4px 8px; background: #444; color: #fff; border: 1px solid #666; border-radius: 3px; cursor: pointer;">
+                <option value="max" selected>Max (anchored to corners)</option>
+                <option value="even">Even (spread along edge)</option>
             </select>
         </div>
 
@@ -921,6 +997,7 @@
         </div>
 
         <button id="apply-layout-btn" style="margin-top: 14px;">Apply Layout</button>
+        <button id="straighten-btn" title="Nudge boxes sideways so patch cords run perpendicular. Vertical positions are left as they are.">Straighten</button>
         <button id="reset-layout-btn" style="margin-top: 14px;">Reset Layout</button>
     </div>
 

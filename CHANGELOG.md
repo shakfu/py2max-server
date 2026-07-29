@@ -4,6 +4,52 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.2.2]
+
+### Added
+
+- **Straighten button** in the layout sidebar. Nudges boxes sideways so patch cords run perpendicular, leaving vertical positions untouched -- a tidy-up for a layout you are otherwise happy with, rather than a re-layout. Inlets and outlets always sit on the top and bottom edges, so a cord is perpendicular exactly when its two ports share an x coordinate.
+
+  Each box is aligned against its primary feed -- the cord landing on its lowest-numbered inlet, which is the main input by Max convention. Fan-outs and fan-ins are not special-cased; the only thing that stops a move is a collision, so where one outlet feeds two boxes at the same height the first claims the column and the second keeps its place. Boxes are walked downstream from the roots, so a shift propagates along a chain. The whole operation is a single undo step.
+
+### Changed
+
+- **Auto-save is now opt-in.** `py2max-server serve` no longer writes edits back to the input file automatically; pass `--auto-save` to restore that behaviour. Serving a patch is a read operation until you ask otherwise. Saving on request is unchanged and unaffected: the editor's Save button and the REPL's `save()` both still write immediately.
+
+  The old default meant anything the browser did -- including actions the user never asked for, such as the layout-on-open described below -- reached disk about two seconds later. That combination rewrote a tracked example patch during testing, and the single-terminal REPL mode had auto-save hardcoded on regardless of any flag.
+
+  The legacy `--no-save` flag is still accepted (hidden) so existing commands keep working, and still forces auto-save off, so `--auto-save --no-save` resolves in favour of not touching the file.
+
+### Fixed
+
+- **Save writes back to the file being served.** The Save button called the *Save As* path, which serializes the patch and hands it to the browser -- so pressing Save produced a copy in `~/Downloads` and never touched the patch being edited. It now sends a `save` message; the server writes to its own path and replies `save_complete`, falling back to a browser Save As only when it has no path (an uploaded patch). With auto-save opt-in, this had left the editor unable to persist anything at all.
+
+- **Save As is now its own toolbar button**, so saving a copy elsewhere stays available rather than being reachable only as a fallback.
+
+- **Ports are placed the way Max places them.** Inlets and outlets were spread evenly along a box edge (`w / (count + 1)`), which insets every port; Max instead anchors the outermost ports near the corners, leaving a small margin, and divides the span between. The difference grew with box width -- on a 157px `cycle~ 440.` the two inlets sat 78px apart instead of at the ends. The previous behaviour is kept as a **Port Placement** option in the layout sidebar (Max / Even), defaulting to Max and persisted per browser; it applies on change rather than waiting for Apply Layout, since it only affects drawing.
+
+  The geometry now lives in a single `portCenterX()` helper. It had been duplicated across five sites -- drawing, drag updates, animation interpolation and both patch cord endpoints -- which is how the drawn ports and the cords attached to them could drift apart.
+
+- **Opening the layout panel no longer rearranges the patch.** The toolbar's Auto-Layout button applied a layout the moment the controls became visible, so merely *looking* at them repositioned every object -- and with auto-save on, that reached disk about two seconds later. It was observed rewriting the tracked `examples/example.maxpat` with layout-engine coordinates (objects pushed to negative positions) without the user asking for anything. Applying a layout is now only ever the explicit "Apply Layout" button, and `tests/test_editor_assets.py` guards against a second call site reappearing.
+
+### Changed
+
+- The layout sidebar's blue left border is gone; its drop shadow already separates it from the canvas.
+
+- The sidebar is resizable by dragging its left edge, with double-click to reset. The width lives in a `--sidebar-width` CSS variable so the panel, its hidden offset and the canvas padding stay in step, and it persists in `localStorage` next to the existing mode preference.
+
+- Slider readouts in the layout controls sit to the right of their slider instead of underneath it, hard against the left edge.
+
+## [0.2.1]
+
+A repair release. Live editing did not persist: the served patcher was never
+bound to its own file, so both the REPL's `save()` and the advertised auto-save
+silently discarded every change. The single-terminal REPL mode had been dead
+since v0.3.0 of py2max removed the API it called.
+
+Requires py2max >= 0.4.1, which fixes rect handling for patches loaded from
+disk; without it any layout call on a served patch raises `AttributeError`.
+
 ### Fixed
 
 - **Live edits are saved again.** `py2max-server serve` loaded the patch with `Patcher.from_file(path)` and no `save_to=`, so the patcher was never bound to its own file: `Patcher._path` stayed `None` and `patcher.save()` returned without writing. Every edit made in the REPL or the browser editor was therefore discarded on exit, and `save()` in the REPL answered "No filepath set" even though the server had been started from a real file.
@@ -18,6 +64,8 @@ All notable changes to this project are documented here. The format is based on 
 
 - The REPL banner no longer advertises `exit()`. ptpython's own `exit()` raises a `ReplExit` that its REPL loop catches and renders as a traceback, leaving you back at the prompt; Ctrl-D is the working exit.
 
+- **Breadcrumbs name the subpatcher you are in.** Max stores a subpatcher's name on the parent box (`p upper`), not on the nested patcher, so reading `title` alone labelled every level "Main" -- a trail reading "Main > Main > Main", correct about depth and useless about location. The label now falls back to the owning box's text with the `p`/`patcher` prefix stripped.
+
 ### Changed
 
 - Dropped the unused `RemoteEvaluator`, spare namespace dicts and dead `configure()` hooks from the REPL client, which described a ptpython integration the client does not use -- it drives `prompt_toolkit` directly, because evaluation has to be routed over the websocket.
@@ -25,6 +73,8 @@ All notable changes to this project are documented here. The format is based on 
 ### Added
 
 - `tests/test_serve_persistence.py`: end-to-end coverage for the serve/REPL path, including a real websocket round trip that edits a patch and asserts the change reaches disk. The previous suite mocked the patcher and server, so it passed while all of the above were broken.
+
+- `tests/test_editor_protocol.py`: end-to-end coverage for the browser editor's websocket protocol against a real server, real client and real fixture patches -- create/move/connect/retitle/delete, undo/redo, batch move and delete, subpatcher navigation and editing, export, and auth rejection. Includes a fidelity guard that opens each fixture (including one with nested subpatchers), saves it with no edits, and asserts the file is unchanged; silent corruption on open+save would matter more than any missing editor feature.
 
 ## [0.2.0]
 

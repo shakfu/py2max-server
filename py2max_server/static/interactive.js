@@ -3,6 +3,15 @@
  * Uses WebSocket for bidirectional real-time communication
  */
 
+// Rendered diameter of an inlet/outlet glyph, in patch units.
+const PORT_DIAMETER = 8;
+
+// Extra gap between a box corner and the outermost port, on top of the half
+// glyph needed to keep the circle inside the outline. Max does not put its
+// ports hard against the corners; this is the visible offset it leaves.
+// Raise for a larger gap, set to 0 for flush-to-corner.
+const PORT_EDGE_MARGIN = 3;
+
 // Common Max/MSP objects offered as typeahead suggestions in the create modal.
 // Not exhaustive -- users can type any object name.
 const COMMON_MAX_OBJECTS = [
@@ -75,6 +84,12 @@ class InteractiveEditor {
         // Whether to hide comment annotation nodes (they clutter auto-layout).
         // Non-destructive: comments stay in the patch and are still saved.
         this.hideComments = localStorage.getItem('hideComments') === 'true';
+
+        // How inlets/outlets are spaced along a box edge. Defaults to Max's own
+        // corner-anchored placement, since matching what Max draws is the point
+        // of the editor; 'even' keeps the previous evenly-spread look.
+        this.portPlacement =
+            localStorage.getItem('portPlacement') === 'even' ? 'even' : 'max';
 
         this.initializeWebSocket();
         this.initializeSVG();
@@ -253,6 +268,21 @@ class InteractiveEditor {
             document.body.classList.add('sidebar-mode');
         }
 
+        this.initializeSidebarResize();
+
+        // Port placement is a rendering preference, so it applies on change
+        // rather than waiting for Apply Layout. Nothing in the patch moves --
+        // only where the ports are drawn on each box.
+        const portPlacementSelect = document.getElementById('port-placement');
+        if (portPlacementSelect) {
+            portPlacementSelect.value = this.portPlacement;
+            portPlacementSelect.addEventListener('change', (e) => {
+                this.portPlacement = e.target.value === 'even' ? 'even' : 'max';
+                localStorage.setItem('portPlacement', this.portPlacement);
+                this.render();
+            });
+        }
+
         // Toggle layout mode button - switch between panel and sidebar
         const toggleLayoutModeBtn = document.getElementById('toggle-layout-mode-btn');
         if (toggleLayoutModeBtn) {
@@ -295,10 +325,26 @@ class InteractiveEditor {
             pickerBackdrop.addEventListener('click', () => this.closeFilePicker());
         }
 
-        // Save button
+        // Save button -- writes back to the file the server is serving.
+        //
+        // This used to call handleSave(), which is the *Save As* path: it
+        // serializes the patch and hands it to the browser, so "Save" produced
+        // a copy in ~/Downloads and never touched the file being edited. The
+        // server already does the right thing on a `save` message (write to its
+        // own path, reply save_complete) and asks for a Save As via
+        // `save_as_required` when it has no path to write to.
         const saveBtn = document.getElementById('save-btn');
         if (saveBtn) {
             saveBtn.addEventListener('click', () => {
+                this.sendMessage({ type: 'save' });
+            });
+        }
+
+        // Save As button -- explicit "write a copy somewhere else", via the
+        // browser (the server cannot open an OS file dialog on your machine).
+        const saveAsBtn = document.getElementById('save-as-btn');
+        if (saveAsBtn) {
+            saveAsBtn.addEventListener('click', () => {
                 this.handleSave();
             });
         }
@@ -347,7 +393,13 @@ class InteractiveEditor {
             redoBtn.addEventListener('click', () => this.redo());
         }
 
-        // Auto-layout button - toggle layout controls panel
+        // Auto-layout button - toggle layout controls panel.
+        //
+        // Opening the panel deliberately does NOT apply a layout. It used to,
+        // which meant merely looking at the layout controls rearranged every
+        // object and -- with auto-save on -- wrote that straight to disk,
+        // silently destroying hand-placed positions in the .maxpat. Applying a
+        // layout is an explicit action: the "Apply Layout" button below.
         const autoLayoutBtn = document.getElementById('auto-layout-btn');
         if (autoLayoutBtn) {
             autoLayoutBtn.addEventListener('click', () => {
@@ -359,11 +411,6 @@ class InteractiveEditor {
                 // In sidebar mode, also toggle the controls-visible class on body for canvas padding
                 if (isSidebarMode) {
                     document.body.classList.toggle('controls-visible');
-                }
-
-                // If panel just became visible, apply layout immediately
-                if (controlsPanel.classList.contains('visible')) {
-                    this.autoLayout();
                 }
             });
         }
@@ -724,10 +771,9 @@ class InteractiveEditor {
 
         // Draw inlets (top of box) using SVG.js
         if (box.inlet_count > 0) {
-            const spacing = w / (box.inlet_count + 1);
             for (let i = 0; i < box.inlet_count; i++) {
-                const circle = group.circle(8)  // diameter = 8, radius = 4
-                    .center(x + spacing * (i + 1), y)
+                const circle = group.circle(PORT_DIAMETER)
+                    .center(this.portCenterX(x, w, i, box.inlet_count), y)
                     .fill('#4080ff')
                     .stroke({ color: '#333', width: 1 })
                     .addClass('inlet port')
@@ -747,10 +793,9 @@ class InteractiveEditor {
 
         // Draw outlets (bottom of box) using SVG.js
         if (box.outlet_count > 0) {
-            const spacing = w / (box.outlet_count + 1);
             for (let i = 0; i < box.outlet_count; i++) {
-                const circle = group.circle(8)  // diameter = 8, radius = 4
-                    .center(x + spacing * (i + 1), y + h)
+                const circle = group.circle(PORT_DIAMETER)
+                    .center(this.portCenterX(x, w, i, box.outlet_count), y + h)
                     .fill('#ff8040')
                     .stroke({ color: '#333', width: 1 })
                     .addClass('outlet port')
@@ -813,31 +858,53 @@ class InteractiveEditor {
         return g;
     }
 
+    /**
+     * Centre-x of one port on a box edge, under the selected placement mode.
+     *
+     * 'max'  -- how Max itself positions ports: the outermost ones sit near the
+     *           corners (not flush against them -- Max leaves a small margin)
+     *           and any others divide the span between. A lone port sits at the
+     *           left. Use this to compare against a patch open in Max.
+     * 'even' -- ports spread evenly *along* the edge (w / (count + 1)), so
+     *           every port is inset. Symmetric and easier to read on wide
+     *           boxes with many ports, but not what Max draws.
+     *
+     * Single source of truth on purpose: the drawing code, the drag-update
+     * code, the animation interpolation and the patch cord endpoints all call
+     * this. While the formula was duplicated across those five places they
+     * could drift apart, leaving cords visibly detached from their ports.
+     */
+    portCenterX(x, w, index, count) {
+        // Half a glyph keeps the circle inside the outline; the extra margin is
+        // the visible gap Max leaves between a corner and the outermost port.
+        const inset = PORT_DIAMETER / 2 + PORT_EDGE_MARGIN;
+
+        if (count <= 1) {
+            return this.portPlacement === 'even' ? x + w / 2 : x + inset;
+        }
+        const safeIndex = Math.max(0, Math.min(index, count - 1));
+
+        if (this.portPlacement === 'even') {
+            return x + (w / (count + 1)) * (safeIndex + 1);
+        }
+        // Narrow boxes: never let the margin push the ports past each other.
+        const span = Math.max(0, w - 2 * inset);
+        return x + inset + (span * safeIndex) / (count - 1);
+    }
+
     getPortPosition(box, portIndex, isOutlet) {
         const x = box.x || 0;
         const y = box.y || 0;
         const w = box.width || 60;
         const h = box.height || 22;
 
-        if (isOutlet) {
-            const count = Math.max(1, box.outlet_count || 1);
-            // Clamp port index to valid range
-            const safeIndex = Math.max(0, Math.min(portIndex, count - 1));
-            const spacing = w / (count + 1);
-            return {
-                x: x + spacing * (safeIndex + 1),
-                y: y + h
-            };
-        } else {
-            const count = Math.max(1, box.inlet_count || 1);
-            // Clamp port index to valid range
-            const safeIndex = Math.max(0, Math.min(portIndex, count - 1));
-            const spacing = w / (count + 1);
-            return {
-                x: x + spacing * (safeIndex + 1),
-                y: y
-            };
-        }
+        const count = Math.max(
+            1, (isOutlet ? box.outlet_count : box.inlet_count) || 1
+        );
+        return {
+            x: this.portCenterX(x, w, portIndex, count),
+            y: isOutlet ? y + h : y
+        };
     }
 
     getBoxFill(box) {
@@ -886,19 +953,13 @@ class InteractiveEditor {
         const w = box.width || 60;
         const h = box.height || 22;
 
-        if (inlets.length > 0) {
-            const spacing = w / (inlets.length + 1);
-            inlets.forEach((inlet, i) => {
-                SVG(inlet).center(x + spacing * (i + 1), y);
-            });
-        }
+        inlets.forEach((inlet, i) => {
+            SVG(inlet).center(this.portCenterX(x, w, i, inlets.length), y);
+        });
 
-        if (outlets.length > 0) {
-            const spacing = w / (outlets.length + 1);
-            outlets.forEach((outlet, i) => {
-                SVG(outlet).center(x + spacing * (i + 1), y + h);
-            });
-        }
+        outlets.forEach((outlet, i) => {
+            SVG(outlet).center(this.portCenterX(x, w, i, outlets.length), y + h);
+        });
 
         // Update connected patchlines
         this.updateConnectedLines(boxId);
@@ -1738,6 +1799,87 @@ class InteractiveEditor {
         });
     }
 
+    /**
+     * Let the user drag the sidebar's left edge to resize it.
+     *
+     * The width lives in the --sidebar-width CSS variable, which drives the
+     * panel width, its hidden off-screen offset and the canvas padding, so one
+     * value keeps all three in step. Persisted like the mode preference.
+     */
+    initializeSidebarResize() {
+        const MIN_WIDTH = 220;
+        const DEFAULT_WIDTH = 280;
+        // Never let the sidebar swallow the canvas on a narrow window.
+        const maxWidth = () => Math.max(MIN_WIDTH, Math.min(700, window.innerWidth - 200));
+
+        const applyWidth = (px) => {
+            const clamped = Math.round(Math.max(MIN_WIDTH, Math.min(maxWidth(), px)));
+            document.documentElement.style.setProperty('--sidebar-width', `${clamped}px`);
+            return clamped;
+        };
+
+        const saved = parseInt(localStorage.getItem('layoutSidebarWidth'), 10);
+        if (Number.isFinite(saved)) {
+            applyWidth(saved);
+        }
+
+        const handle = document.getElementById('sidebar-resize-handle');
+        if (!handle) return;
+
+        let dragging = false;
+
+        const onPointerMove = (e) => {
+            if (!dragging) return;
+            // The sidebar is right-anchored, so its width is the distance from
+            // the pointer to the right edge of the viewport.
+            applyWidth(window.innerWidth - e.clientX);
+            e.preventDefault();
+        };
+
+        const stopDrag = () => {
+            if (!dragging) return;
+            dragging = false;
+            handle.classList.remove('dragging');
+            document.body.classList.remove('resizing-sidebar');
+            window.removeEventListener('pointermove', onPointerMove);
+            window.removeEventListener('pointerup', stopDrag);
+
+            const current = getComputedStyle(document.documentElement)
+                .getPropertyValue('--sidebar-width').trim();
+            const px = parseInt(current, 10);
+            if (Number.isFinite(px)) {
+                localStorage.setItem('layoutSidebarWidth', String(px));
+            }
+            // The canvas viewport changed size, so re-fit unless the user has
+            // taken manual control of zoom/pan.
+            if (typeof this.render === 'function') this.render();
+        };
+
+        handle.addEventListener('pointerdown', (e) => {
+            dragging = true;
+            handle.classList.add('dragging');
+            document.body.classList.add('resizing-sidebar');
+            window.addEventListener('pointermove', onPointerMove);
+            window.addEventListener('pointerup', stopDrag);
+            e.preventDefault();
+        });
+
+        // Double-click the handle to go back to the default width.
+        handle.addEventListener('dblclick', () => {
+            applyWidth(DEFAULT_WIDTH);
+            localStorage.setItem('layoutSidebarWidth', String(DEFAULT_WIDTH));
+            if (typeof this.render === 'function') this.render();
+        });
+
+        // Keep a previously-saved width legal if the window is later shrunk.
+        window.addEventListener('resize', () => {
+            const px = parseInt(
+                getComputedStyle(document.documentElement)
+                    .getPropertyValue('--sidebar-width'), 10);
+            if (Number.isFinite(px)) applyWidth(px);
+        });
+    }
+
     initializeLayoutControls() {
         // Link Distance slider
         const linkDistanceSlider = document.getElementById('link-distance-slider');
@@ -1823,6 +1965,13 @@ class InteractiveEditor {
         }
 
         // Reset Layout button
+        const straightenBtn = document.getElementById('straighten-btn');
+        if (straightenBtn) {
+            straightenBtn.addEventListener('click', () => {
+                this.straightenLayout();
+            });
+        }
+
         const resetLayoutBtn = document.getElementById('reset-layout-btn');
         if (resetLayoutBtn) {
             resetLayoutBtn.addEventListener('click', () => {
@@ -2038,6 +2187,160 @@ class InteractiveEditor {
         this.userAdjustedView = false;
         this.render();
         this.updateInfo(`Reset ${this.originalPositions.size} objects to original positions`);
+    }
+
+    /**
+     * True if placing `boxId` at (x, y) would collide with any other box.
+     * A small gap keeps straightened boxes from ending up flush against a
+     * neighbour, which reads as an overlap even when it technically is not.
+     */
+    wouldOverlap(boxId, x, y, gap = 4) {
+        const box = this.boxes.get(boxId);
+        if (!box) return false;
+        const w = box.width || 60;
+        const h = box.height || 22;
+
+        for (const [otherId, other] of this.boxes) {
+            if (otherId === boxId) continue;
+            const ow = other.width || 60;
+            const oh = other.height || 22;
+            const separated =
+                x + w + gap <= other.x ||
+                other.x + ow + gap <= x ||
+                y + h + gap <= other.y ||
+                other.y + oh + gap <= y;
+            if (!separated) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Straighten: nudge boxes sideways so patch cords run perpendicular.
+     *
+     * Inlets and outlets always sit on the top and bottom edges, so a cord is
+     * perpendicular exactly when its two ports share an x coordinate. This
+     * shifts boxes along x only -- the vertical arrangement a layout produced
+     * (or that you arranged by hand) is left alone.
+     *
+     * Every box with an incoming cord is aligned against its *primary* feed --
+     * the cord landing on its lowest-numbered inlet, which is the main input by
+     * Max convention. Fan-outs and fan-ins are not special-cased: each box is
+     * aligned once, against that one cord.
+     *
+     * The only thing that stops a move is a collision. Where an outlet feeds
+     * two boxes that sit at the same height, the first to be placed claims the
+     * column and the second keeps its position, since stacking them would be
+     * worse than leaving one cord slanted.
+     *
+     * Boxes are walked downstream from the roots so a chain settles in order,
+     * each link aligning against an already-placed source and the shift
+     * propagating along the chain.
+     */
+    straightenLayout() {
+        if (this.boxes.size === 0) {
+            this.updateInfo('Nothing to straighten');
+            return;
+        }
+
+        const incoming = new Map();    // dstId -> [line]
+        const downstream = new Map();  // srcId -> [dstId]
+
+        this.lines.forEach(line => {
+            if (!incoming.has(line.dst)) incoming.set(line.dst, []);
+            incoming.get(line.dst).push(line);
+
+            if (!downstream.has(line.src)) downstream.set(line.src, []);
+            downstream.get(line.src).push(line.dst);
+        });
+
+        const queue = [];
+        const visited = new Set();
+        const moves = [];
+        let blocked = 0;
+
+        const align = (id) => {
+            const box = this.boxes.get(id);
+            if (!box) return;
+
+            const feeds = incoming.get(id) || [];
+            if (feeds.length === 0) return;
+
+            // Primary feed: the cord into the lowest-numbered inlet.
+            const line = feeds.reduce((best, l) =>
+                (l.dst_inlet || 0) < (best.dst_inlet || 0) ? l : best);
+
+            const srcBox = this.boxes.get(line.src);
+            if (!srcBox) return;
+
+            const srcX = this.portCenterX(
+                srcBox.x, srcBox.width || 60,
+                line.src_outlet || 0, Math.max(1, srcBox.outlet_count || 1)
+            );
+            const dstX = this.portCenterX(
+                box.x, box.width || 60,
+                line.dst_inlet || 0, Math.max(1, box.inlet_count || 1)
+            );
+
+            const dx = srcX - dstX;
+            if (Math.abs(dx) < 0.5) return;         // already perpendicular
+
+            const newX = box.x + dx;
+            if (this.wouldOverlap(id, newX, box.y)) {
+                blocked++;
+                return;
+            }
+
+            box.x = newX;
+            moves.push({ box_id: id, x: newX, y: box.y });
+        };
+
+        const drain = () => {
+            while (queue.length) {
+                const id = queue.shift();
+                align(id);
+                (downstream.get(id) || []).forEach(nextId => {
+                    if (!visited.has(nextId)) {
+                        visited.add(nextId);
+                        queue.push(nextId);
+                    }
+                });
+            }
+        };
+
+        // Roots first, so every box is placed after the source it aligns to.
+        this.boxes.forEach((_, id) => {
+            if (!incoming.has(id)) {
+                visited.add(id);
+                queue.push(id);
+            }
+        });
+        drain();
+
+        // A feedback loop has no root, so nothing above reaches it. Seed each
+        // remaining box and drain again -- after the main pass, never before,
+        // or the downstream ordering the cascade depends on is lost.
+        this.boxes.forEach((_, id) => {
+            if (!visited.has(id)) {
+                visited.add(id);
+                queue.push(id);
+                drain();
+            }
+        });
+
+        if (moves.length === 0) {
+            this.updateInfo(
+                blocked ? `Nothing to straighten (${blocked} blocked by other objects)`
+                        : 'Already straight'
+            );
+            return;
+        }
+
+        moves.forEach(m => this.updateBoxPosition(m.box_id, m.x, m.y));
+        // One message, so the whole straighten is a single undo step.
+        this.sendMessage({ type: 'update_positions', positions: moves });
+
+        const note = blocked ? `, ${blocked} blocked` : '';
+        this.updateInfo(`Straightened ${moves.length} object${moves.length === 1 ? '' : 's'}${note}`);
     }
 
     autoLayout() {
@@ -2308,14 +2611,12 @@ class InteractiveEditor {
 
     getPortPositionFromCoords(x, y, w, h, portIndex, portCount, isOutlet) {
         /**
-         * Calculate port position given box coordinates (for animation interpolation).
+         * Port position from raw box coordinates (for animation interpolation).
+         * Shares portCenterX so cords tracking a moving box stay attached to
+         * the same point the port is drawn at.
          */
-        const count = Math.max(1, portCount);
-        const safeIndex = Math.max(0, Math.min(portIndex, count - 1));
-        const spacing = w / (count + 1);
-
         return {
-            x: x + spacing * (safeIndex + 1),
+            x: this.portCenterX(x, w, portIndex, Math.max(1, portCount)),
             y: isOutlet ? (y + h) : y
         };
     }

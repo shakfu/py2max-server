@@ -25,6 +25,7 @@ import asyncio
 import http.server
 import json
 import secrets
+import sys
 import threading
 import webbrowser
 from pathlib import Path
@@ -181,19 +182,28 @@ def _sized_labels(labels: list, count: int) -> list:
 
 # Browsers to try, in order, before falling back to the OS default. Chrome is
 # preferred: the editor's Open (file-upload) flow is unreliable in Safari.
-_PREFERRED_BROWSERS = ("chrome", "google-chrome", "chromium")
+# "Google Chrome" is the macOS application name -- webbrowser drives it through
+# osascript by name there, so the Unix-style spellings never match.
+_PREFERRED_BROWSERS: tuple[str, ...] = ("chrome", "google-chrome", "chromium")
+if sys.platform == "darwin":
+    _PREFERRED_BROWSERS = ("Google Chrome", "Chromium") + _PREFERRED_BROWSERS
 
 
 def _open_in_browser(url: str) -> None:
     """Open ``url`` in a preferred browser, falling back to the OS default."""
     for name in _PREFERRED_BROWSERS:
         try:
-            webbrowser.get(name).open(url)
-            print(f"Opened in {name}")
-            return
+            # open() reports whether it actually worked. Ignoring it meant a
+            # failed launch (e.g. osascript "Can't get application") still
+            # printed "Opened in chrome" and suppressed the fallback, so no
+            # browser opened at all.
+            if webbrowser.get(name).open(url):
+                print(f"Opened in {name}")
+                return
         except webbrowser.Error:
             continue
-    webbrowser.open(url)
+    if not webbrowser.open(url):
+        print(f"Could not open a browser automatically -- open {url} yourself")
 
 
 def validate_message(data: dict) -> tuple[bool, Optional[str]]:
@@ -300,6 +310,35 @@ def validate_message(data: dict) -> tuple[bool, Optional[str]]:
             )
 
     return True, None
+
+
+def _patcher_label(patcher: Any) -> str:
+    """Human-readable name for one breadcrumb level.
+
+    A Max subpatcher does not carry its own name: `p upper` stores it in the
+    *parent box's* text, and the nested patcher dict has no `title` at all. So
+    reading `title` alone labelled every level "Main", turning the breadcrumb
+    into "Main > Main > Main" -- accurate about depth, useless about location.
+    Fall back to the owning box's text, minus the `p`/`patcher` prefix.
+    """
+    title = getattr(patcher, "title", None)
+    if title:
+        return str(title)
+
+    parent = getattr(patcher, "_parent", None)
+    if parent is None:
+        return "Main"
+
+    for box in getattr(parent, "_boxes", []):
+        if getattr(box, "_patcher", None) is patcher:
+            text = (getattr(box, "text", "") or "").strip()
+            if not text:
+                break
+            parts = text.split()
+            if len(parts) > 1 and parts[0] in ("p", "patcher"):
+                return " ".join(parts[1:])
+            return text
+    return "Main"
 
 
 def get_patcher_state_json(patcher: Optional["Patcher"]) -> dict:
@@ -418,8 +457,7 @@ def get_patcher_state_json(patcher: Optional["Patcher"]) -> dict:
     patcher_path: list[str] = []
     current: Any = patcher
     while current:
-        title = getattr(current, "title", None) or "Main"
-        patcher_path.insert(0, title)
+        patcher_path.insert(0, _patcher_label(current))
         current = getattr(current, "_parent", None)
 
     # Get current patcher title

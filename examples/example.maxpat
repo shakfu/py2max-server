@@ -4,7 +4,7 @@
         "appversion": {
             "major": 9,
             "minor": 1,
-            "revision": 4,
+            "revision": 5,
             "architecture": "x64",
             "modernui": 1
         },
@@ -20,7 +20,7 @@
                     "maxclass": "comment",
                     "numinlets": 1,
                     "numoutlets": 0,
-                    "patching_rect": [ 202.0, 183.0, 124.0, 36.0 ],
+                    "patching_rect": [ 126.0, 26.0, 124.0, 36.0 ],
                     "style": "helpfile_label",
                     "text": "signal input sets oscillator frequency"
                 }
@@ -32,7 +32,7 @@
                     "maxclass": "ezdac~",
                     "numinlets": 2,
                     "numoutlets": 0,
-                    "patching_rect": [ 190.0, 366.0, 45.0, 45.0 ]
+                    "patching_rect": [ 475.0, 402.0, 45.0, 45.0 ]
                 }
             },
             {
@@ -44,7 +44,7 @@
                     "numinlets": 2,
                     "numoutlets": 1,
                     "outlettype": [ "" ],
-                    "patching_rect": [ 190.0, 86.0, 45.0, 23.0 ],
+                    "patching_rect": [ 277.0, 99.0, 45.0, 23.0 ],
                     "text": "$1 20"
                 }
             },
@@ -57,7 +57,7 @@
                     "numinlets": 2,
                     "numoutlets": 2,
                     "outlettype": [ "signal", "bang" ],
-                    "patching_rect": [ 190.0, 129.0, 40.0, 23.0 ],
+                    "patching_rect": [ 277.0, 172.0, 40.0, 23.0 ],
                     "text": "line~"
                 }
             },
@@ -73,7 +73,7 @@
                     "orientation": 1,
                     "outlettype": [ "signal", "", "float", "list" ],
                     "parameter_enable": 1,
-                    "patching_rect": [ 190.0, 298.0, 136.0, 35.0 ],
+                    "patching_rect": [ 475.0, 320.0, 136.0, 35.0 ],
                     "saved_attribute_attributes": {
                         "valueof": {
                             "parameter_initial": [ -70 ],
@@ -104,7 +104,7 @@
                     "numoutlets": 2,
                     "outlettype": [ "", "bang" ],
                     "parameter_enable": 1,
-                    "patching_rect": [ 190.0, 36.0, 54.0, 23.0 ],
+                    "patching_rect": [ 277.0, 26.0, 54.0, 23.0 ],
                     "saved_attribute_attributes": {
                         "valueof": {
                             "parameter_initial": [ 440 ],
@@ -131,7 +131,7 @@
                     "numinlets": 2,
                     "numoutlets": 1,
                     "outlettype": [ "signal" ],
-                    "patching_rect": [ 190.0, 221.0, 157.0, 23.0 ],
+                    "patching_rect": [ 277.0, 245.0, 157.0, 23.0 ],
                     "text": "cycle~ 440."
                 }
             },
@@ -141,7 +141,7 @@
                     "maxclass": "scope~",
                     "numinlets": 2,
                     "numoutlets": 0,
-                    "patching_rect": [ 385.0, 281.0, 130.0, 130.0 ]
+                    "patching_rect": [ 277.0, 318.0, 130.0, 130.0 ]
                 }
             }
         ],
@@ -155,14 +155,14 @@
             {
                 "patchline": {
                     "destination": [ "obj-1", 0 ],
-                    "order": 0,
+                    "order": 1,
                     "source": [ "obj-12", 0 ]
                 }
             },
             {
                 "patchline": {
                     "destination": [ "obj-27", 0 ],
-                    "order": 1,
+                    "order": 0,
                     "source": [ "obj-12", 0 ]
                 }
             },

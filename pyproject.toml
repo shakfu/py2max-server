@@ -7,7 +7,7 @@ authors = [
 maintainers = [
     { name = "Shakeeb Alireza", email = "shakfu@users.noreply.github.com" }
 ]
-version = "0.2.0"
+version = "0.2.2"
 readme = "README.md"
 requires-python = ">=3.9"
 keywords = ["Max", "maxpat", "py2max", "websocket", "repl"]
@@ -27,7 +27,10 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "py2max>=0.4.0",
+    # 0.4.1 fixes rect handling on patches loaded from disk; without it any
+    # layout call on a served patch (including the REPL's optimize()) raises
+    # AttributeError, since every rect arrives from JSON as a plain list.
+    "py2max>=0.4.1",
     "websockets>=12.0",
     "ptpython>=3.0.0",
 ]
@@ -35,8 +38,13 @@ dependencies = [
 [project.scripts]
 py2max-server = "py2max_server.cli:main"
 
-# During local development, resolve py2max from the sibling checkout rather than
-# PyPI. Remove this block (or replace with the published version) for release.
+# Resolve py2max from the sibling checkout for local development. This does NOT
+# need removing before a release: `[tool.uv.sources]` is a uv-local resolution
+# hint and is stripped from the built distribution, whose metadata carries only
+# the `py2max>=...` requirement above (verified against the built wheel). What
+# it does do is keep `uv lock`/`uv sync` working when the required py2max
+# version is not on PyPI yet -- which is the normal state right after bumping
+# both packages together.
 [tool.uv.sources]
 py2max = { path = "../py2max", editable = true }
 

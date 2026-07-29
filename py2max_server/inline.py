@@ -169,10 +169,12 @@ class BackgroundServerREPL:
         port: int = 8000,
         log_file: Optional[Path] = None,
         auto_open: bool = True,
+        auto_save: bool = False,
     ):
         self.patcher = patcher
         self.port = port
         self.auto_open = auto_open
+        self.auto_save = auto_save
         self.log_file = log_file or Path("outputs/py2max_server.log")
         self.server: Optional[InteractivePatcherServer] = None
         self.server_thread: Optional[threading.Thread] = None
@@ -215,7 +217,7 @@ class BackgroundServerREPL:
                 self.patcher,
                 port=self.port,
                 auto_open=self.auto_open,
-                auto_save=True,
+                auto_save=self.auto_save,
             )
 
             self._server_task = asyncio.current_task()
@@ -315,6 +317,7 @@ async def start_background_server_repl(
     port: int = 8000,
     log_file: Optional[Path] = None,
     auto_open: bool = True,
+    auto_save: bool = False,
 ) -> None:
     """Start REPL with server in background (single terminal mode).
 
@@ -323,12 +326,16 @@ async def start_background_server_repl(
         port: Server port (default: 8000)
         log_file: Log file path (default: outputs/py2max_server.log)
         auto_open: Open a browser on the editor page (honours ``--no-open``)
+        auto_save: Write edits back to the file automatically (opt in; the
+            default leaves the patch on disk untouched until an explicit save)
 
     Example:
         >>> p = Patcher('demo.maxpat')
         >>> await start_background_server_repl(p, port=8000)
     """
-    repl = BackgroundServerREPL(patcher, port, log_file, auto_open=auto_open)
+    repl = BackgroundServerREPL(
+        patcher, port, log_file, auto_open=auto_open, auto_save=auto_save
+    )
     await repl.start()
 
 

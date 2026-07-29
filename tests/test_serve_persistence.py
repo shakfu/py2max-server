@@ -74,24 +74,24 @@ class TestLoadedPatcherIsSaveable:
         p.add_textbox("svf~ 500")
         before = _num_boxes(patch_file)
 
-        server = type("S", (), {"port": 8000, "handler": type("H", (), {"clients": set()})()})()
+        server = type(
+            "S", (), {"port": 8000, "handler": type("H", (), {"clients": set()})()}
+        )()
         ReplCommands(p, server).save()
 
         assert _num_boxes(patch_file) == before + 1
 
 
 class TestAutoSaveWiring:
-    """Bug 2: --no-save must actually control auto_save."""
+    """Bug 2 (was): the CLI must actually control auto_save, and say what it did.
 
-    def test_auto_save_defaults_on(self):
-        args = build_parser().parse_args(["serve", "x.maxpat"])
-        assert not args.no_save, "auto-save is advertised as on by default"
+    Auto-save is now opt-in. Serving a patch is a read operation until the user
+    asks otherwise -- the previous default rewrote the file on the browser's
+    behalf, which cost a tracked example patch.
+    """
 
-    def test_serve_interactive_receives_auto_save(self, patch_file, monkeypatch):
-        """cmd_serve must pass auto_save through, not leave it at its False default.
-
-        Sync, not async: ``cmd_serve`` drives its own ``asyncio.run``.
-        """
+    def _capture(self, monkeypatch, argv, patch_file):
+        """Run cmd_serve with serve_interactive stubbed, returning its auto_save."""
         import py2max_server.cli as cli_mod
 
         captured = {}
@@ -101,26 +101,45 @@ class TestAutoSaveWiring:
             raise KeyboardInterrupt  # unwind before the server loop starts
 
         monkeypatch.setattr(cli_mod, "serve_interactive", fake_serve_interactive)
-        args = build_parser().parse_args(["serve", str(patch_file), "--no-open"])
-        cli_mod.cmd_serve(args)
+        # Sync, not async: cmd_serve drives its own asyncio.run.
+        cli_mod.cmd_serve(
+            build_parser().parse_args(["serve", str(patch_file), "--no-open", *argv])
+        )
+        return captured.get("auto_save")
 
-        assert captured.get("auto_save") is True
+    def test_auto_save_is_off_by_default(self, patch_file, monkeypatch):
+        assert self._capture(monkeypatch, [], patch_file) is False
 
-    def test_no_save_flag_disables_auto_save(self, patch_file, monkeypatch):
+    def test_auto_save_flag_turns_it_on(self, patch_file, monkeypatch):
+        assert self._capture(monkeypatch, ["--auto-save"], patch_file) is True
+
+    def test_legacy_no_save_flag_still_accepted(self, patch_file, monkeypatch):
+        """--no-save now restates the default; it must not become an error."""
+        assert self._capture(monkeypatch, ["--no-save"], patch_file) is False
+
+    def test_no_save_wins_over_auto_save(self, patch_file, monkeypatch):
+        """A contradictory pair resolves toward not touching the file."""
+        assert (
+            self._capture(monkeypatch, ["--auto-save", "--no-save"], patch_file)
+            is False
+        )
+
+    def test_inline_mode_gets_the_same_setting(self, patch_file, monkeypatch):
+        """The single-terminal REPL path must not hardcode auto-save on."""
         import py2max_server.cli as cli_mod
 
         captured = {}
 
-        async def fake_serve_interactive(patcher, port, auto_open, auto_save=False):
+        async def fake_background(patcher, port, log_file, auto_open, auto_save=False):
             captured["auto_save"] = auto_save
             raise KeyboardInterrupt
 
-        monkeypatch.setattr(cli_mod, "serve_interactive", fake_serve_interactive)
-        args = build_parser().parse_args(
-            ["serve", str(patch_file), "--no-open", "--no-save"]
+        monkeypatch.setattr(cli_mod, "start_background_server_repl", fake_background)
+        cli_mod.cmd_serve(
+            build_parser().parse_args(
+                ["serve", str(patch_file), "--no-open", "--repl", "--log-file", "x.log"]
+            )
         )
-        cli_mod.cmd_serve(args)
-
         assert captured.get("auto_save") is False
 
 

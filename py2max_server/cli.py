@@ -38,13 +38,18 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     patcher = _load_patcher(input_path)
 
+    # Opt-in, and the legacy --no-save still forces it off.
+    auto_save = bool(args.auto_save) and not args.no_save
+
     try:
         print(f"Starting server for: {input_path}")
         print(f"HTTP server: http://localhost:{args.port}")
         print(f"WebSocket server: ws://localhost:{args.port + 1}")
         print("Interactive editing enabled - changes sync bidirectionally")
-        if not args.no_save:
-            print(f"Auto-save enabled: changes will be saved to {input_path}")
+        if auto_save:
+            print(f"Auto-save ON: edits are written back to {input_path}")
+        else:
+            print("Auto-save OFF: use Save in the editor (or save() in the REPL)")
         if args.repl:
             print("REPL mode enabled - type 'commands()' for help")
         print("Press Ctrl+C to stop")
@@ -58,17 +63,18 @@ def cmd_serve(args: argparse.Namespace) -> int:
                     port=args.port,
                     log_file=log_file_path,
                     auto_open=not args.no_open,
+                    auto_save=auto_save,
                 )
                 return
 
-            # Client-server mode (default). auto_save must be passed through:
-            # it defaults to False, so leaving it off made the "Auto-save
-            # enabled" banner above a lie and dropped every browser edit.
+            # Client-server mode (default). auto_save must be passed through
+            # explicitly -- both here and to the inline mode above -- or the
+            # banner and the actual behaviour drift apart.
             server = await serve_interactive(
                 patcher,
                 args.port,
                 not args.no_open,
-                auto_save=not args.no_save,
+                auto_save=auto_save,
             )
 
             repl_port = args.port + 2  # HTTP=port, WS=port+1, REPL=port+2
@@ -171,9 +177,18 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument(
         "--no-open", action="store_true", help="Don't automatically open browser"
     )
+    # Off by default: serving a patch should not rewrite it. Edits are saved on
+    # request (Save in the editor, save() in the REPL); opt in here to have them
+    # written back automatically a couple of seconds after each change.
     serve_parser.add_argument(
-        "--no-save", action="store_true", help="Disable auto-save on changes"
+        "--auto-save",
+        action="store_true",
+        help="Write edits back to the input file automatically (default: off)",
     )
+    # Retained (hidden) so existing commands keep working now that it restates
+    # the default. Still honoured as a hard off, so `--auto-save --no-save`
+    # resolves the contradiction in favour of not touching the file.
+    serve_parser.add_argument("--no-save", action="store_true", help=argparse.SUPPRESS)
     serve_parser.add_argument(
         "--repl",
         action="store_true",
