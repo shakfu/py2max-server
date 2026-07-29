@@ -120,7 +120,7 @@ async def start_inline_repl(
 
     Example:
         >>> p = Patcher('demo.maxpat')
-        >>> server = await p.serve(port=8000)
+        >>> server = await serve_interactive(p, port=8000)
         >>> await start_inline_repl(p, server, Path('server.log'))
     """
     from .repl import start_repl
@@ -168,14 +168,19 @@ class BackgroundServerREPL:
         patcher: "Patcher",
         port: int = 8000,
         log_file: Optional[Path] = None,
+        auto_open: bool = True,
     ):
         self.patcher = patcher
         self.port = port
+        self.auto_open = auto_open
         self.log_file = log_file or Path("outputs/py2max_server.log")
         self.server: Optional[InteractivePatcherServer] = None
         self.server_thread: Optional[threading.Thread] = None
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self.ready_event = threading.Event()
+        # The long-lived task owning the server, so stop() has something
+        # concrete to cancel from the main thread.
+        self._server_task: Optional[asyncio.Task] = None
 
     def notify_update_sync(self):
         """Synchronously notify server (running in background thread) of updates.
@@ -201,11 +206,19 @@ class BackgroundServerREPL:
         asyncio.set_event_loop(self.loop)
 
         async def run():
-            # Start server
-            self.server = await self.patcher.serve(
+            # Start server. py2max removed ``Patcher.serve()`` in v0.3.0 when
+            # this package was split out, so go through serve_interactive
+            # directly -- the old call left this whole mode dead.
+            from .websocket import serve_interactive
+
+            self.server = await serve_interactive(
+                self.patcher,
                 port=self.port,
-                auto_open=True,
+                auto_open=self.auto_open,
+                auto_save=True,
             )
+
+            self._server_task = asyncio.current_task()
 
             # Signal that server is ready
             self.ready_event.set()
@@ -213,14 +226,18 @@ class BackgroundServerREPL:
             # Keep running
             try:
                 while True:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(3600)
             except asyncio.CancelledError:
-                # Shutdown requested
+                # Shutdown requested from stop(); release the ports before the
+                # loop closes, then let the cancellation finish unwinding.
                 await self.server.stop()
+                raise
 
         # Run server
         try:
             self.loop.run_until_complete(run())
+        except asyncio.CancelledError:
+            pass  # normal shutdown path
         except Exception as e:
             print(f"Server error: {e}", file=sys.stderr)
         finally:
@@ -276,17 +293,28 @@ class BackgroundServerREPL:
             restore_console_logging()
 
     def stop(self):
-        """Stop background server."""
-        if self.loop and self.server:
-            # Cancel the server loop
-            for task in asyncio.all_tasks(self.loop):
-                task.cancel()
+        """Stop the background server and wait for its thread to unwind.
+
+        Called from the main (REPL) thread, so the cancellation has to be
+        handed to the server's own loop via ``call_soon_threadsafe``. The
+        previous version called ``asyncio.all_tasks(self.loop)`` and cancelled
+        directly from this thread, which is not thread-safe and -- because it
+        never woke the loop -- left the server running and the ports held.
+        """
+        loop, task = self.loop, self._server_task
+        if loop is None or task is None or loop.is_closed():
+            return
+
+        loop.call_soon_threadsafe(task.cancel)
+        if self.server_thread is not None:
+            self.server_thread.join(timeout=5)
 
 
 async def start_background_server_repl(
     patcher: "Patcher",
     port: int = 8000,
     log_file: Optional[Path] = None,
+    auto_open: bool = True,
 ) -> None:
     """Start REPL with server in background (single terminal mode).
 
@@ -294,12 +322,13 @@ async def start_background_server_repl(
         patcher: Patcher instance
         port: Server port (default: 8000)
         log_file: Log file path (default: outputs/py2max_server.log)
+        auto_open: Open a browser on the editor page (honours ``--no-open``)
 
     Example:
         >>> p = Patcher('demo.maxpat')
         >>> await start_background_server_repl(p, port=8000)
     """
-    repl = BackgroundServerREPL(patcher, port, log_file)
+    repl = BackgroundServerREPL(patcher, port, log_file, auto_open=auto_open)
     await repl.start()
 
 

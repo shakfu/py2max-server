@@ -18,7 +18,7 @@ Example:
     >>>
     >>> async def main():
     ...     p = Patcher('demo.maxpat')
-    ...     server = await p.serve(port=8000)
+    ...     server = await serve_interactive(p, port=8000)
     ...     await start_repl(p, server)
     >>>
     >>> asyncio.run(main())
@@ -329,7 +329,7 @@ async def start_repl(
         >>>
         >>> async def main():
         ...     p = Patcher('demo.maxpat')
-        ...     server = await p.serve(port=8000)
+        ...     server = await serve_interactive(p, port=8000)
         ...     await start_repl(p, server)
         >>>
         >>> asyncio.run(main())
@@ -397,7 +397,9 @@ async def start_repl(
     print()
     print("Type 'commands()' to see available commands")
     print("Type 'help(p)' to see patcher API")
-    print("Press Ctrl+D or type 'exit()' to quit")
+    # Ctrl-D only: ptpython's own exit() raises a ReplExit that its REPL loop
+    # catches and renders as a traceback, so the prompt just comes back.
+    print("Press Ctrl+D to quit")
     print()
     print("=" * 70)
     print()

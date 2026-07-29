@@ -13,17 +13,19 @@ import sys
 from pathlib import Path
 
 from py2max import Patcher
-from py2max.core.common import Rect
 
 from . import serve_interactive, start_background_server_repl, start_repl_server
 from .client import start_repl_client
 
 
-def _coerce_rect(patcher: Patcher) -> None:
-    """Normalize a list/tuple patcher rect into a Rect (round-trip from JSON)."""
-    rect = getattr(patcher, "rect", None)
-    if isinstance(rect, (list, tuple)) and len(rect) == 4:
-        patcher.rect = Rect(*rect)
+def _load_patcher(input_path: Path) -> Patcher:
+    """Load a patch bound to its own path, so saving writes back to it.
+
+    ``save_to`` is what sets ``Patcher._path``; without it ``patcher.save()``
+    (and therefore both ``save()`` in the REPL and the server's auto-save)
+    silently does nothing and every edit is lost on exit.
+    """
+    return Patcher.from_file(input_path, save_to=str(input_path))
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
@@ -34,8 +36,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print(f"Input file not found: {input_path}", file=sys.stderr)
         return 1
 
-    patcher = Patcher.from_file(input_path)
-    _coerce_rect(patcher)
+    patcher = _load_patcher(input_path)
 
     try:
         print(f"Starting server for: {input_path}")
@@ -53,12 +54,22 @@ def cmd_serve(args: argparse.Namespace) -> int:
             if args.repl and args.log_file:
                 log_file_path = Path(args.log_file)
                 await start_background_server_repl(
-                    patcher, port=args.port, log_file=log_file_path
+                    patcher,
+                    port=args.port,
+                    log_file=log_file_path,
+                    auto_open=not args.no_open,
                 )
                 return
 
-            # Client-server mode (default).
-            server = await serve_interactive(patcher, args.port, not args.no_open)
+            # Client-server mode (default). auto_save must be passed through:
+            # it defaults to False, so leaving it off made the "Auto-save
+            # enabled" banner above a lie and dropped every browser edit.
+            server = await serve_interactive(
+                patcher,
+                args.port,
+                not args.no_open,
+                auto_save=not args.no_save,
+            )
 
             repl_port = args.port + 2  # HTTP=port, WS=port+1, REPL=port+2
             repl_server = await start_repl_server(patcher, server, port=repl_port)

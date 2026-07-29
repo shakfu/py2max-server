@@ -159,106 +159,42 @@ class ReplClient:
             return None
 
     async def run_repl(self):
-        """Run interactive REPL using ptpython."""
-
-        # Create proxy functions that execute remotely
-        async def remote_eval(code: str) -> Any:
-            """Evaluate code on remote server."""
-            return await self.execute(code)
-
-        # Build namespace with remote execution (reserved for future use)
-        _namespace = {  # noqa: F841
-            "__name__": "__main__",
-            "__doc__": None,
-            "_remote_eval": remote_eval,
-        }
-
-        def configure(repl):
-            """Configure ptpython."""
-            repl.show_signature = True
-            repl.enable_auto_suggest = True
-            repl.show_docstring = True
-            repl.complete_while_typing = False  # Disable - can't complete remote
-            repl.enable_history_search = True
-            repl.vi_mode = False
-            repl.enable_syntax_highlighting = True
-            repl.highlight_matching_parenthesis = True
-            repl.enable_mouse_support = True
-
-        # Custom input handler that sends to server
-        # Note: This is a simplified version - full implementation would need
-        # to intercept ptpython's execution and route through websocket
+        """Run the interactive prompt until the user exits."""
         print("Starting REPL...")
         print()
 
         try:
-            # Use ptpython with syntax highlighting and history
-            await self._ptpython_repl()
-
+            await self._prompt_loop()
         except (EOFError, KeyboardInterrupt):
             print()
             print("Exiting REPL...")
 
-    async def _ptpython_repl(self) -> None:
-        """Full-featured ptpython REPL with remote execution.
+    async def _prompt_loop(self) -> None:
+        """Read-eval-print loop; every line is executed on the remote server.
 
-        Uses ptpython for editing features (syntax highlighting, completion)
-        but executes code on the remote server.
+        Uses prompt_toolkit directly for line editing, syntax highlighting and
+        history. (ptpython is not used here: its REPL owns evaluation, and this
+        client has to route every line over the websocket instead.)
         """
-        # Create a remote execution namespace (reserved for future use)
-        _namespace = {  # noqa: F841
-            "_client": self,
-            "_execute": self.execute,
-        }
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.history import InMemoryHistory
+        from prompt_toolkit.lexers import PygmentsLexer
+        from pygments.lexers.python import PythonLexer  # type: ignore[import-untyped]
 
-        # Custom evaluator that executes remotely (reserved for future use)
-        class RemoteEvaluator:
-            def __init__(self, client: "ReplClient") -> None:
-                self.client = client
+        # Built once, outside the loop. A PromptSession owns the history buffer,
+        # so constructing one per prompt (as this used to) handed every keystroke
+        # a fresh empty history -- up-arrow recall and `enable_history_search`
+        # both silently did nothing for the whole session.
+        session: PromptSession[str] = PromptSession(
+            message="py2max[remote]>>> ",
+            lexer=PygmentsLexer(PythonLexer),
+            history=InMemoryHistory(),
+            enable_history_search=True,
+            complete_while_typing=False,
+        )
 
-            async def __call__(self, code: str) -> Optional[str]:
-                """Execute code on remote server."""
-                if not code.strip():
-                    return None
-
-                # Execute on server
-                result = await self.client.execute(code)
-                return result
-
-        _evaluator = RemoteEvaluator(self)  # noqa: F841
-
-        # Configure ptpython
-        def configure(repl: Any) -> None:
-            """Configure ptpython REPL."""
-            # Enable auto-completion
-            repl.enable_auto_suggest = True
-            repl.complete_while_typing = False  # Disable since completion is local
-
-            # Enable syntax highlighting
-            repl.enable_syntax_highlighting = True
-
-            # Show signature
-            repl.show_signature = True
-
-            # Vi mode (optional - can be toggled with F4)
-            repl.vi_mode = False
-
-        # Run ptpython REPL with remote execution
-        # Note: We use a custom event loop integration
         while True:
             try:
-                # Get input using ptpython
-                from prompt_toolkit import PromptSession
-                from prompt_toolkit.lexers import PygmentsLexer
-                from pygments.lexers.python import PythonLexer  # type: ignore[import-untyped]
-
-                session: PromptSession[str] = PromptSession(
-                    message="py2max[remote]>>> ",
-                    lexer=PygmentsLexer(PythonLexer),
-                    enable_history_search=True,
-                    complete_while_typing=False,
-                )
-
                 code = await session.prompt_async()
 
                 if not code.strip():

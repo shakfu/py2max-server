@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Live edits are saved again.** `py2max-server serve` loaded the patch with `Patcher.from_file(path)` and no `save_to=`, so the patcher was never bound to its own file: `Patcher._path` stayed `None` and `patcher.save()` returned without writing. Every edit made in the REPL or the browser editor was therefore discarded on exit, and `save()` in the REPL answered "No filepath set" even though the server had been started from a real file.
+
+- **`--no-save` now controls auto-save, and the banner tells the truth.** `serve_interactive` was called without `auto_save`, whose default is `False`, so auto-save was off even while the startup output announced "Auto-save enabled: changes will be saved to ...".
+
+- **Single-terminal mode (`serve --repl --log-file`) starts again.** It called `Patcher.serve()`, which py2max removed in v0.3.0 when this package was split out, so the mode had been dead since then -- it failed with `RuntimeError: Server failed to start` after a 10-second timeout. It now goes through `serve_interactive` directly, and honours `--no-open`.
+
+- **The background server shuts down cleanly.** `BackgroundServerREPL.stop()` called `asyncio.all_tasks(loop)` and cancelled from the main thread; that is not thread-safe and never woke the server's loop, so the thread outlived the REPL and kept its ports bound. Cancellation is now handed to the server's own loop with `call_soon_threadsafe`, and `stop()` waits for the thread.
+
+- **Command history works in the remote REPL client.** The `PromptSession` was constructed inside the input loop, so every prompt got a fresh, empty history and up-arrow recall never returned anything. It is now built once per session.
+
+- The REPL banner no longer advertises `exit()`. ptpython's own `exit()` raises a `ReplExit` that its REPL loop catches and renders as a traceback, leaving you back at the prompt; Ctrl-D is the working exit.
+
+### Changed
+
+- Dropped the unused `RemoteEvaluator`, spare namespace dicts and dead `configure()` hooks from the REPL client, which described a ptpython integration the client does not use -- it drives `prompt_toolkit` directly, because evaluation has to be routed over the websocket.
+
+### Added
+
+- `tests/test_serve_persistence.py`: end-to-end coverage for the serve/REPL path, including a real websocket round trip that edits a patch and asserts the change reaches disk. The previous suite mocked the patcher and server, so it passed while all of the above were broken.
+
 ## [0.2.0]
 
 ### Added
