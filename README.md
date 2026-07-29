@@ -10,7 +10,9 @@ This package was split out of the core `py2max` library so the patch generator s
 pip install py2max-server
 ```
 
-This pulls in `py2max` (the core generator, 0.4.1 or newer) and `websockets`.
+This pulls in `py2max` (the core generator, 0.4.1 or newer) and `websockets`. Python 3.9 or newer.
+
+> **Upgrading from 0.2.x:** the standalone terminal REPL is gone in 0.3.0. `py2max-server repl` and the `--repl` / `--log-file` flags have been removed, along with `ReplClient` and friends -- the console now lives in the editor itself. See the [changelog](CHANGELOG.md).
 
 ## Usage
 
@@ -39,11 +41,14 @@ Auto-save is off by default because an editor action you did not intend should n
 ### Editing
 
 - Drag objects to move them; rubber-band or shift-click to select several, then drag or delete as a group.
-- Drag from a port to another to connect; click a cord to select it.
+- Drag from one port to another to connect; click a cord to select it.
 - Double-click empty canvas to create an object, with type-ahead over common Max objects.
-- Undo/redo with Cmd/Ctrl-Z and Cmd/Ctrl-Shift-Z, at any subpatcher depth.
-- Double-click a subpatcher to descend; the breadcrumb walks back out.
-- `F` fits the patch to the window, wheel zooms, space-drag pans.
+- Double-click an object to edit its text -- or, if it is a subpatcher, to descend into it. The breadcrumb walks back out, as does **Parent** and `Esc`.
+- `Delete` removes the selection. Undo/redo with Cmd/Ctrl-Z and Cmd/Ctrl-Shift-Z (or Cmd/Ctrl-Y), at any subpatcher depth.
+- `F` fits the patch to the window, the wheel zooms, and space-drag pans.
+- **Open** loads another `.maxpat` from the server; **Hide Comments** removes comment boxes from view without deleting them.
+
+There is no keyboard shortcut for saving -- use the **Save** button.
 
 ### Layout
 
@@ -88,6 +93,23 @@ async def main():
 
 asyncio.run(main())
 ```
+
+`serve_interactive` starts the editor only. The console is a second server on
+its own port, so add `start_repl_server` if you want the Console button to
+connect -- the `serve` command does this for you:
+
+```python
+from py2max_server import serve_interactive, start_repl_server
+
+server = await serve_interactive(p, port=8000, auto_open=True)
+console = await start_repl_server(p, server, port=8002)   # editor expects port + 2
+...
+console.close()
+await console.wait_closed()
+await server.stop()
+```
+
+Pass `auto_save=True` to `serve_interactive` for the equivalent of `--auto-save`.
 
 ## Security
 

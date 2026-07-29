@@ -415,7 +415,13 @@ if __name__ == "__main__":
 
 
 class TestCompletion:
-    """Tab completion resolves against the same namespace ``eval`` uses."""
+    """Tab completion resolves against the same namespace ``eval`` uses.
+
+    These assert on the completed *name*, never on its trailing punctuation:
+    ``rlcompleter`` appends ``()`` to a zero-argument callable from Python 3.10
+    on, but only ``(`` on 3.9, so pinning the exact string passes locally and
+    fails on the oldest supported interpreter.
+    """
 
     @pytest.mark.asyncio
     async def test_completes_patcher_attributes(
@@ -429,7 +435,9 @@ class TestCompletion:
         reply = json.loads(mock_websocket.send.call_args[0][0])
         assert reply["type"] == "completions"
         assert reply["token"] == "p.add_te"
-        assert "p.add_textbox(" in reply["matches"]
+        assert any(m.startswith("p.add_textbox") for m in reply["matches"]), (
+            reply["matches"]
+        )
 
     @pytest.mark.asyncio
     async def test_completes_command_helpers(
@@ -455,7 +463,9 @@ class TestCompletion:
 
         reply = json.loads(mock_websocket.send.call_args[0][0])
         assert reply["token"] == "p.optimize_la"
-        assert "p.optimize_layout()" in reply["matches"]
+        assert any(m.startswith("p.optimize_layout") for m in reply["matches"]), (
+            reply["matches"]
+        )
 
     @pytest.mark.asyncio
     async def test_unknown_name_returns_no_matches(
