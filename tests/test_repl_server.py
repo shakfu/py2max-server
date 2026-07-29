@@ -435,9 +435,9 @@ class TestCompletion:
         reply = json.loads(mock_websocket.send.call_args[0][0])
         assert reply["type"] == "completions"
         assert reply["token"] == "p.add_te"
-        assert any(m.startswith("p.add_textbox") for m in reply["matches"]), (
-            reply["matches"]
-        )
+        assert any(m.startswith("p.add_textbox") for m in reply["matches"]), reply[
+            "matches"
+        ]
 
     @pytest.mark.asyncio
     async def test_completes_command_helpers(
@@ -463,9 +463,9 @@ class TestCompletion:
 
         reply = json.loads(mock_websocket.send.call_args[0][0])
         assert reply["token"] == "p.optimize_la"
-        assert any(m.startswith("p.optimize_layout") for m in reply["matches"]), (
-            reply["matches"]
-        )
+        assert any(m.startswith("p.optimize_layout") for m in reply["matches"]), reply[
+            "matches"
+        ]
 
     @pytest.mark.asyncio
     async def test_unknown_name_returns_no_matches(
