@@ -348,3 +348,136 @@ async def test_unknown_message_type_is_rejected(tmp_path):
         await s.send(type="definitely_not_a_real_message")
         msg = await s.expect("error")
         assert msg["type"] == "error"
+
+
+@pytest.mark.asyncio
+async def test_resize_object_changes_size_and_keeps_position(tmp_path):
+    """Resizing must alter w/h only -- the box must not drift."""
+    path = tmp_path / "resize.maxpat"
+    p = Patcher(path)
+    p.add_textbox("scope~")
+    p.save()
+
+    async with EditorSession(path, 9320) as s:
+        box = s.state["boxes"][0]
+        before = box["patching_rect"]
+
+        await s.send(type="resize_object", box_id=box["id"], w=240, h=180)
+        delta = await s.expect("size_update", "update")
+
+        assert delta["type"] == "size_update", delta
+        assert (delta["w"], delta["h"]) == (240.0, 180.0)
+
+        await s.send(type="save")
+        assert (await s.expect("save_complete", "save_as_required"))[
+            "type"
+        ] == "save_complete"
+        disk = s.on_disk()["patcher"]["boxes"][0]["box"]["patching_rect"]
+
+    assert list(disk) == [before["x"], before["y"], 240.0, 180.0], (
+        f"expected position preserved and size changed, got {disk}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resize_is_clamped_to_a_usable_minimum(tmp_path):
+    """A box must never be shrunk to the point of being unselectable."""
+    from py2max_server.websocket import MIN_BOX_SIZE
+
+    path = tmp_path / "clamp.maxpat"
+    p = Patcher(path)
+    p.add_textbox("scope~")
+    p.save()
+
+    async with EditorSession(path, 9330) as s:
+        box_id = s.state["boxes"][0]["id"]
+        await s.send(type="resize_object", box_id=box_id, w=0, h=-40)
+        delta = await s.expect("size_update", "update")
+
+    assert delta["w"] == MIN_BOX_SIZE
+    assert delta["h"] == MIN_BOX_SIZE
+
+
+@pytest.mark.asyncio
+async def test_resize_is_undoable(tmp_path):
+    path = tmp_path / "undo_resize.maxpat"
+    p = Patcher(path)
+    p.add_textbox("scope~")
+    p.save()
+
+    async with EditorSession(path, 9340) as s:
+        box = s.state["boxes"][0]
+        original = dict(box["patching_rect"])
+
+        await s.send(type="resize_object", box_id=box["id"], w=240, h=180)
+        await s.expect("size_update", "update")
+
+        await s.send(type="undo")
+        st = await s.expect("update")
+
+    restored = st["boxes"][0]["patching_rect"]
+    assert (restored["w"], restored["h"]) == (original["w"], original["h"])
+
+
+@pytest.mark.asyncio
+async def test_batch_resize_is_a_single_undo_step(tmp_path):
+    path = tmp_path / "batch_resize.maxpat"
+    p = Patcher(path)
+    p.add_textbox("scope~")
+    p.add_textbox("gain~")
+    p.save()
+
+    async with EditorSession(path, 9350) as s:
+        ids = [b["id"] for b in s.state["boxes"]]
+
+        await s.send(
+            type="resize_objects",
+            sizes=[
+                {"box_id": ids[0], "w": 200, "h": 150},
+                {"box_id": ids[1], "w": 90, "h": 40},
+            ],
+        )
+        st = await s.expect("update")
+        rects = {b["id"]: b["patching_rect"] for b in st["boxes"]}
+        assert (rects[ids[0]]["w"], rects[ids[0]]["h"]) == (200, 150)
+        assert (rects[ids[1]]["w"], rects[ids[1]]["h"]) == (90, 40)
+
+        # One message, so one Cmd-Z puts both back.
+        await s.send(type="undo")
+        st = await s.expect("update")
+
+    rects = {b["id"]: b["patching_rect"] for b in st["boxes"]}
+    assert (rects[ids[0]]["w"], rects[ids[0]]["h"]) != (200, 150)
+    assert (rects[ids[1]]["w"], rects[ids[1]]["h"]) != (90, 40)
+
+
+@pytest.mark.asyncio
+async def test_resize_does_not_corrupt_the_rest_of_the_patch(tmp_path):
+    """A resize must touch one rect and nothing else in the file."""
+    path = _copy_fixture("complex.maxpat", tmp_path)
+    original = json.loads(path.read_text())
+
+    async with EditorSession(path, 9360) as s:
+        target = s.state["boxes"][0]["id"]
+        await s.send(type="resize_object", box_id=target, w=321, h=123)
+        await s.expect("size_update", "update")
+        await s.send(type="save")
+        await s.expect("save_complete", "save_as_required")
+
+    after = json.loads(path.read_text())
+
+    def rects(doc):
+        return {
+            b["box"]["id"]: b["box"].get("patching_rect")
+            for b in doc["patcher"]["boxes"]
+        }
+
+    before_rects, after_rects = rects(original), rects(after)
+    assert set(before_rects) == set(after_rects), "boxes were added or lost"
+
+    changed = [k for k in before_rects if before_rects[k] != after_rects[k]]
+    assert changed == [target], f"resize altered more than the target box: {changed}"
+
+    # Everything other than the boxes list must be byte-identical.
+    del original["patcher"]["boxes"], after["patcher"]["boxes"]
+    assert original == after, "resize altered unrelated patch fields"

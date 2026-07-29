@@ -40,7 +40,8 @@ Auto-save is off by default because an editor action you did not intend should n
 
 ### Editing
 
-- Drag objects to move them; rubber-band or shift-click to select several, then drag or delete as a group.
+- Drag objects to move them; rubber-band or shift-click to select several, then drag, resize or delete as a group.
+- Select an object to get resize handles on its right edge, bottom edge and bottom-right corner. Any object can be resized, though it matters most for UI objects like `scope~`, `function` and `live.gain~`; Max reasserts its own size for objects that are not resizable.
 - Drag from one port to another to connect; click a cord to select it.
 - Double-click empty canvas to create an object, with type-ahead over common Max objects.
 - Double-click an object to edit its text -- or, if it is a subpatcher, to descend into it. The breadcrumb walks back out, as does **Parent** and `Esc`.

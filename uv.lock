@@ -612,7 +612,7 @@ docs = [
 
 [[package]]
 name = "py2max-server"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "." }
 dependencies = [
     { name = "py2max" },

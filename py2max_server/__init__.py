@@ -10,7 +10,7 @@ Modules:
 - cli: the ``py2max-server serve`` entry point
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 from .websocket import (
     InteractivePatcherServer,

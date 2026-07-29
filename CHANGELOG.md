@@ -4,7 +4,28 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
-## [0.3.0] - 2026-07-29
+## [0.3.1]
+
+Objects can be resized in the editor. Additive only -- nothing in 0.3.0 changes
+behaviour.
+
+### Added
+
+- **Box resizing.** Select an object to get handles on its right edge, bottom edge and bottom-right corner; drag one to resize, with the live `w x h` shown in the status line. Multi-select resizes the whole selection by the same delta. A drag commits once on release, so it costs a single undo step rather than one per frame.
+
+  Handles sit just outside the box outline, clear of the port row -- flush on the corner they would overlap the last outlet and, being drawn after the ports, intercept the clicks meant to start a connection from it.
+
+  Only `w`/`h` change; a box never moves as a side effect of being resized. That is why no top or left handles are offered: dragging one would have to shift the box's origin too. Both ends clamp to a usable minimum, since the message schema validates types and not ranges, and the browser is not the authority.
+
+  New protocol messages: `resize_object` (answered with a `size_update` delta) and `resize_objects` (batch, answered with full state, mirroring `update_positions`).
+
+- Resizing is deliberately **ungated** -- every object can be resized. `docs/box-resize.md` has the full analysis; the short version is that maxref carries no resizability field and every proxy for one is unusable. UI-ness is spelled four different ways with no shared token, 32% of objects have a malformed `tag` that cannot be classified at all, and `jsui`, `bpatcher` and `playlist~` -- all resizable in Max -- carry no UI tag whatsoever. An allowlist built from that data would silently refuse legitimate edits with no override. The failure modes are asymmetric: wrongly allowing a resize is self-correcting, since Max reasserts its own size on load and undo is one press away, while wrongly blocking one just looks like a broken editor.
+
+### Fixed
+
+- Tab completion tests no longer pin the exact text `rlcompleter` returns. From Python 3.10 it closes the parens on a zero-argument callable (`optimize_layout()`) where 3.9 emits only `optimize_layout(`, so the assertions passed locally and failed CI on the oldest supported interpreter. They now assert on the completed name. No behaviour changed -- completion itself worked on 3.9 throughout.
+
+## [0.3.0]
 
 The REPL moves into the browser. The standalone terminal client is gone, and
 with it the two things that made it awkward to use: copying a session token by

@@ -291,6 +291,58 @@ def test_console_input_does_not_leak_canvas_shortcuts():
     assert "stopPropagation" in block
 
 
+def test_resize_sends_one_message_per_gesture():
+    """A resize drag must commit on release, not stream per frame.
+
+    Every message pushes an undo entry server-side, so per-frame sends would
+    make one drag cost dozens of Cmd-Z presses to unwind.
+    """
+    js = _js()
+    drag = _balanced_block(js, js.index("updateResize(event) {"))
+    assert "sendMessage" not in drag, "resize streams messages while dragging"
+
+    commit = _balanced_block(js, js.index("finishResize() {"))
+    assert "resize_object" in commit
+    assert "resize_objects" in commit, "multi-select resize is not batched"
+
+
+def test_resize_handles_follow_the_box():
+    """Handles must be re-placed by every partial geometry update.
+
+    They are positioned absolutely inside the box group rather than carried by
+    a group transform, so a delta update that moves the rect, ports and cords
+    leaves the handles behind at the old location unless it moves them too.
+    That is exactly what happened: dragging a selected box stranded its handles.
+    """
+    js = _js()
+    for fn in ("updateBoxPosition(boxId, x, y) {", "updateBoxSize(boxId, w, h) {"):
+        block = _balanced_block(js, js.index(fn))
+        assert "positionResizeHandles" in block, (
+            f"{fn.split('(')[0]} does not re-place the resize handles; they will "
+            "detach from the box"
+        )
+
+
+def test_resize_handles_never_move_the_box():
+    """Only right/bottom/corner handles exist.
+
+    The server's resize preserves x/y by design, so a top or left handle would
+    silently fail to move the box -- better not to offer one.
+    """
+    js = _js()
+    handles = js[js.index("const RESIZE_HANDLES") : js.index("const RESIZE_CURSORS")]
+    for forbidden in ("'n'", "'w'", "'nw'", "'ne'", "'sw'"):
+        assert forbidden not in handles, (
+            f"handle {forbidden} moves the box's origin, which resize does not send"
+        )
+
+
+def test_resize_is_clamped_client_side_too():
+    js = _js()
+    drag = _balanced_block(js, js.index("updateResize(event) {"))
+    assert "MIN_BOX_SIZE" in drag, "drag can shrink a box below the usable minimum"
+
+
 def test_both_port_placement_modes_are_offered():
     """The Max-style placement is a choice, not a silent replacement."""
     html = (STATIC / "interactive.html").read_text(encoding="utf-8")

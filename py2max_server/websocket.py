@@ -71,7 +71,15 @@ MESSAGE_SCHEMAS: dict[str, dict[str, type | tuple[type, ...]]] = {
     "redo": {},
     "update_positions": {"positions": list},  # Batch move (multi-select group drag)
     "delete_objects": {"box_ids": list},  # Batch delete (multi-select)
+    "resize_object": {"box_id": str, "w": (int, float), "h": (int, float)},
+    "resize_objects": {"sizes": list},  # Batch resize (multi-select)
 }
+
+# Floor for a resized box. Small enough not to get in the way, large enough that
+# a box can always still be selected and dragged back. Enforced here as well as
+# in the browser: the schema validator checks types, not ranges, and the socket
+# is not the browser's to trust.
+MIN_BOX_SIZE = 8.0
 
 # Maximum lengths for string fields to prevent abuse
 MAX_STRING_LENGTHS: dict[str, int] = {
@@ -741,6 +749,10 @@ class InteractiveWebSocketHandler:
                 await self.handle_update_positions(data)
             elif message_type == "delete_objects":
                 await self.handle_delete_objects(data)
+            elif message_type == "resize_object":
+                await self.handle_resize_object(data)
+            elif message_type == "resize_objects":
+                await self.handle_resize_objects(data)
 
         except json.JSONDecodeError as e:
             print(f"Invalid JSON: {e}")
@@ -796,6 +808,80 @@ class InteractiveWebSocketHandler:
                 # Schedule debounced save
                 await self.schedule_save()
                 break
+
+    def _apply_size(self, box: Any, w: Any, h: Any) -> tuple[float, float]:
+        """Set a box's size, keeping its position. Returns the applied (w, h).
+
+        Mirrors the move handler's rect handling: ``Rect`` is a NamedTuple and
+        therefore immutable, so a resized rect is rebuilt rather than mutated,
+        while a plain list (a hand-assigned rect) is updated in place.
+        """
+        width = max(MIN_BOX_SIZE, float(w))
+        height = max(MIN_BOX_SIZE, float(h))
+
+        rect = getattr(box, "patching_rect", None)
+        if rect is None:
+            return width, height
+
+        if hasattr(rect, "x"):
+            from py2max.core.common import Rect
+
+            box.patching_rect = Rect(rect.x, rect.y, width, height)
+        elif isinstance(rect, list) and len(rect) >= 4:
+            rect[2] = width
+            rect[3] = height
+
+        return width, height
+
+    async def handle_resize_object(self, data: dict):
+        """Resize one box.
+
+        Deliberately ungated: there is no reliable way to tell which Max objects
+        are resizable (see docs/box-resize.md), and wrongly refusing an edit is
+        worse than allowing one Max will simply reassert on load.
+        """
+        if not self.patcher:
+            return
+
+        box_id = data.get("box_id")
+        for box in self.patcher._boxes:
+            if box.id == box_id:
+                self._push_undo()
+                width, height = self._apply_size(box, data.get("w"), data.get("h"))
+
+                # Delta rather than whole state, following position_update.
+                await self.broadcast(
+                    {
+                        "type": "size_update",
+                        "box_id": box_id,
+                        "w": width,
+                        "h": height,
+                    }
+                )
+                await self.schedule_save()
+                break
+
+    async def handle_resize_objects(self, data: dict) -> None:
+        """Resize several boxes at once (one undo step for the whole group)."""
+        if not self.patcher:
+            return
+
+        sizes = data.get("sizes") or []
+        if not isinstance(sizes, list) or not sizes:
+            return
+
+        by_id = {s.get("box_id"): s for s in sizes if isinstance(s, dict)}
+        boxes = [b for b in self.patcher._boxes if b.id in by_id]
+        if not boxes:
+            return
+
+        self._push_undo()
+        for box in boxes:
+            entry = by_id[box.id]
+            self._apply_size(box, entry.get("w"), entry.get("h"))
+
+        await self.broadcast(get_patcher_state_json(self.patcher))
+        await self.schedule_save()
 
     async def schedule_save(self):
         """Schedule a debounced save after 2 seconds of no updates (if auto-save enabled)."""

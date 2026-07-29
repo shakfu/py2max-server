@@ -12,6 +12,22 @@ const PORT_DIAMETER = 8;
 // Raise for a larger gap, set to 0 for flush-to-corner.
 const PORT_EDGE_MARGIN = 3;
 
+// Resize affordances on a selected box. Right edge, bottom edge and the
+// bottom-right corner only: a top or left handle would have to move the box as
+// well as resize it, and resizing deliberately preserves position.
+const RESIZE_HANDLES = ['e', 's', 'se'];
+const RESIZE_CURSORS = { e: 'ew-resize', s: 'ns-resize', se: 'nwse-resize' };
+const RESIZE_HANDLE_SIZE = 8;
+
+// Handles sit this far outside the box outline. Placed flush on the corner they
+// overlapped the last outlet -- and being drawn after the ports, they stole the
+// clicks meant to start a connection from it.
+const RESIZE_HANDLE_OFFSET = 6;
+
+// Smallest box a drag can produce. Matches MIN_BOX_SIZE on the server, which
+// clamps again -- the browser is not the authority here.
+const MIN_BOX_SIZE = 8;
+
 // Common Max/MSP objects offered as typeahead suggestions in the create modal.
 // Not exhaustive -- users can type any object name.
 const COMMON_MAX_OBJECTS = [
@@ -47,6 +63,7 @@ class InteractiveEditor {
         this.selectedBox = null;
         this.selectedBoxes = new Set();  // Multi-select: ids of selected boxes
         this.selectedLine = null;  // Track selected patchline for deletion
+        this.resizing = null;      // In-progress resize drag, see startResize
         this.dragging = false;
         this.dragStarted = false;  // Track if drag actually started
         this.dragOffset = { x: 0, y: 0 };
@@ -615,6 +632,14 @@ class InteractiveEditor {
                 // Update the visual position without full re-render
                 this.updateBoxPosition(data.box_id, data.x, data.y);
             }
+        } else if (data.type === 'size_update') {
+            // Delta from another client (or our own resize echoed back).
+            const box = this.boxes.get(data.box_id);
+            if (box) {
+                box.width = data.w;
+                box.height = data.h;
+                this.updateBoxSize(data.box_id, data.w, data.h);
+            }
         } else if (data.type === 'save_complete') {
             this.updateInfo(`Saved to ${data.filepath}`);
             console.log('Patch saved:', data.filepath);
@@ -692,6 +717,7 @@ class InteractiveEditor {
                 if (rect) {
                     SVG(rect).stroke({ color: '#ff8040', width: 3 });
                 }
+                this.addResizeHandles(box);
             }
         });
 
@@ -914,6 +940,166 @@ class InteractiveEditor {
         return '#f0f0f0';
     }
 
+    /**
+     * Live-update one box's size without a full re-render.
+     *
+     * Mirrors updateBoxPosition: the box rect, its label clip, the ports
+     * (whose x spacing derives from the width, and whose outlet row sits at
+     * y + h) and any attached cords all have to follow.
+     */
+    /**
+     * Draw resize handles on a selected box.
+     *
+     * Only the right edge, bottom edge and bottom-right corner. Dragging a
+     * top or left handle would have to move the box as well as resize it, and
+     * the server's resize deliberately preserves position -- so those are
+     * omitted rather than faked with a second message.
+     */
+    addResizeHandles(box) {
+        const w = box.width || 60;
+        const h = box.height || 22;
+        const group = this.boxesGroup.querySelector(`[data-id="${box.id}"]`);
+        if (!group) return;
+
+        RESIZE_HANDLES.forEach(dir => {
+            const handle = SVG(group).rect(RESIZE_HANDLE_SIZE, RESIZE_HANDLE_SIZE)
+                .fill('#ff8040')
+                .stroke({ color: '#fff', width: 1 })
+                .addClass('resize-handle')
+                .attr('data-dir', dir)
+                .css('cursor', RESIZE_CURSORS[dir]);
+
+            handle.node.addEventListener('mousedown', (e) => {
+                this.startResize(e, box, dir);
+            });
+        });
+
+        this.positionResizeHandles(box.id, box.x || 0, box.y || 0, w, h);
+    }
+
+    /** Place (or re-place) a box's handles for the given geometry. */
+    positionResizeHandles(boxId, x, y, w, h) {
+        const group = this.boxesGroup.querySelector(`[data-id="${boxId}"]`);
+        if (!group) return;
+
+        group.querySelectorAll('.resize-handle').forEach(node => {
+            const dir = node.getAttribute('data-dir');
+            const cx = dir === 's'
+                ? x + w / 2
+                : x + w + RESIZE_HANDLE_OFFSET;
+            const cy = dir === 'e'
+                ? y + h / 2
+                : y + h + RESIZE_HANDLE_OFFSET;
+            SVG(node).center(cx, cy);
+        });
+    }
+
+    /**
+     * Begin a resize drag. Sizes are applied live for feedback but only sent
+     * on release, matching how a move sends one message per gesture rather
+     * than one per frame.
+     */
+    startResize(event, box, dir) {
+        event.stopPropagation();   // do not start a box drag as well
+        event.preventDefault();
+
+        const start = this.getSVGPoint(event);
+        const ids = this.selectedBoxes.has(box.id) && this.selectedBoxes.size > 1
+            ? Array.from(this.selectedBoxes)
+            : [box.id];
+
+        this.resizing = {
+            dir,
+            startX: start.x,
+            startY: start.y,
+            // Every box in the selection resizes by the same delta.
+            boxes: ids
+                .map(id => this.boxes.get(id))
+                .filter(Boolean)
+                .map(b => ({ id: b.id, w: b.width || 60, h: b.height || 22 })),
+        };
+    }
+
+    /** Apply the in-progress resize for the current pointer position. */
+    updateResize(event) {
+        if (!this.resizing) return;
+
+        const pt = this.getSVGPoint(event);
+        const dx = pt.x - this.resizing.startX;
+        const dy = pt.y - this.resizing.startY;
+        const dir = this.resizing.dir;
+
+        this.resizing.boxes.forEach(entry => {
+            const box = this.boxes.get(entry.id);
+            if (!box) return;
+            const w = dir === 's' ? entry.w : Math.max(MIN_BOX_SIZE, entry.w + dx);
+            const h = dir === 'e' ? entry.h : Math.max(MIN_BOX_SIZE, entry.h + dy);
+            box.width = w;
+            box.height = h;
+            this.updateBoxSize(entry.id, w, h);
+        });
+
+        const first = this.boxes.get(this.resizing.boxes[0].id);
+        if (first) {
+            this.updateInfo(`${Math.round(first.width)} x ${Math.round(first.height)}`);
+        }
+    }
+
+    /** Commit the resize: one message, so it is a single undo step. */
+    finishResize() {
+        if (!this.resizing) return;
+
+        const sizes = this.resizing.boxes
+            .map(entry => this.boxes.get(entry.id))
+            .filter(Boolean)
+            .map(b => ({ box_id: b.id, w: b.width, h: b.height }));
+        const changed = sizes.some((s, i) =>
+            s.w !== this.resizing.boxes[i].w || s.h !== this.resizing.boxes[i].h);
+
+        this.resizing = null;
+        if (!changed) return;
+
+        if (sizes.length === 1) {
+            this.sendMessage({ type: 'resize_object', ...sizes[0] });
+        } else {
+            this.sendMessage({ type: 'resize_objects', sizes });
+        }
+    }
+
+    updateBoxSize(boxId, w, h) {
+        const boxElement = this.boxesGroup.querySelector(`[data-id="${boxId}"]`);
+        const box = this.boxes.get(boxId);
+        if (!boxElement || !box) return;
+
+        const x = box.x || 0;
+        const y = box.y || 0;
+        const svgBox = SVG(boxElement);
+
+        const rect = svgBox.findOne('rect');
+        if (rect) rect.size(w, h);
+
+        const text = svgBox.findOne('text');
+        if (text) text.attr({ x: x + 5, y: y + h / 2 + 4 });
+
+        const clipEl = this.svg.querySelector(`#clip-${boxId} rect`);
+        if (clipEl) {
+            clipEl.setAttribute('width', w);
+            clipEl.setAttribute('height', h);
+        }
+
+        const inlets = boxElement.querySelectorAll('.inlet');
+        const outlets = boxElement.querySelectorAll('.outlet');
+        inlets.forEach((inlet, i) => {
+            SVG(inlet).center(this.portCenterX(x, w, i, inlets.length), y);
+        });
+        outlets.forEach((outlet, i) => {
+            SVG(outlet).center(this.portCenterX(x, w, i, outlets.length), y + h);
+        });
+
+        this.positionResizeHandles(boxId, x, y, w, h);
+        this.updateConnectedLines(boxId);
+    }
+
     updateBoxPosition(boxId, x, y) {
         /**
          * Efficiently update a single box position without full re-render.
@@ -961,6 +1147,11 @@ class InteractiveEditor {
         outlets.forEach((outlet, i) => {
             SVG(outlet).center(this.portCenterX(x, w, i, outlets.length), y + h);
         });
+
+        // Handles are positioned absolutely rather than carried by a group
+        // transform, so they have to be re-placed like the ports. Without this
+        // they stay behind at the box's old location when it is dragged.
+        this.positionResizeHandles(boxId, x, y, w, h);
 
         // Update connected patchlines
         this.updateConnectedLines(boxId);
@@ -1176,6 +1367,13 @@ class InteractiveEditor {
     }
 
     handleCanvasMouseMove(event) {
+        // Checked before panning and box dragging: a resize drag starts on a
+        // handle and must own the gesture until release.
+        if (this.resizing) {
+            this.updateResize(event);
+            return;
+        }
+
         if (this.panning && this.panStart) {
             // Convert the pixel delta since pan-start into SVG units (CTM.a/.d is
             // screen-per-SVG scale, constant while panning since w/h don't change)
@@ -1230,6 +1428,11 @@ class InteractiveEditor {
     }
 
     handleCanvasMouseUp(event) {
+        if (this.resizing) {
+            this.finishResize();
+            return;
+        }
+
         if (this.panning) {
             this.endPan();
             return;

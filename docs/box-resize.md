@@ -1,6 +1,9 @@
 # Box Resizing: Plan and Gating Recommendation
 
-Status: analysis only, nothing implemented
+Status: **implemented** (0.3.1). The recommendation in section 4 was adopted --
+resizing is ungated. Section 5 describes what was built, with two deviations
+noted inline: handles are right/bottom/corner only, and a batch resize
+broadcasts full state rather than a delta.
 Audience: py2max and py2max-server maintainers
 
 ## Summary
@@ -200,6 +203,16 @@ The larger piece:
   path batches.
 - Extend multi-select to `resize_objects` so a group resize is a single undo
   step, as group move already is.
+
+**As built**, with two deviations:
+
+- Handles are right (`e`), bottom (`s`) and bottom-right (`se`) only. A top or
+  left handle has to move the box's origin as well as change its size, and the
+  server's resize deliberately preserves position -- so offering one would mean
+  either a second message per drag or a handle that silently does half its job.
+  A guard in `tests/test_editor_assets.py` keeps `n`/`w`/`nw`/`ne`/`sw` out.
+- `resize_objects` broadcasts full state rather than a `size_update` delta,
+  matching `update_positions`. Only the single-box path uses the delta.
 
 ### 5.4 Testing
 
