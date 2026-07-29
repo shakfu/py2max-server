@@ -186,8 +186,7 @@ def test_straighten_is_one_undo_step():
     assert 'id="straighten-btn"' in html
     block = _balanced_block(js, js.index("straightenLayout() {"))
     assert "'update_positions'" in block, (
-        "straighten does not send a batched move; undo would need one press "
-        "per object"
+        "straighten does not send a batched move; undo would need one press per object"
     )
     assert "'update_position'" not in block.replace("'update_positions'", ""), (
         "straighten sends per-box moves as well as the batch"
