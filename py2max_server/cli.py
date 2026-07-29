@@ -66,9 +66,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
             # HTTP=port, editor WebSocket=port+1, console=port+2. The editor
             # page opens the console socket itself when you press Console.
             console_port = args.port + 2
-            console_server = await start_repl_server(
-                patcher, server, port=console_port
-            )
+            console_server = await start_repl_server(patcher, server, port=console_port)
 
             print()
             print("=" * 70)
