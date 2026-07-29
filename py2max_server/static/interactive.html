@@ -641,6 +641,105 @@
             margin-top: 6px !important;
         }
 
+        /* ---- Python console ---------------------------------------------- */
+        #console-panel {
+            position: fixed;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: 280px;
+            background: #1b1b1b;
+            border-top: 1px solid #444;
+            box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.4);
+            display: none;
+            flex-direction: column;
+            z-index: 120;
+            font-family: "SF Mono", Menlo, Consolas, monospace;
+            font-size: 12px;
+        }
+
+        #console-panel.visible {
+            display: flex;
+        }
+
+        #console-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 10px;
+            background: #262626;
+            border-bottom: 1px solid #3a3a3a;
+            flex: 0 0 auto;
+        }
+
+        #console-title {
+            color: #ddd;
+            font-weight: 600;
+        }
+
+        #console-status {
+            color: #888;
+            margin-right: auto;
+        }
+
+        #console-status.ready { color: #4caf50; }
+        #console-status.error { color: #ff6b6b; }
+
+        #console-header button {
+            background: #3a3a3a;
+            color: #ddd;
+            border: none;
+            border-radius: 3px;
+            padding: 2px 8px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+
+        #console-header button:hover { background: #4a4a4a; }
+
+        #console-output {
+            flex: 1 1 auto;
+            overflow-y: auto;
+            padding: 8px 10px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            color: #ccc;
+            line-height: 1.45;
+        }
+
+        #console-output .echo   { color: #7fb2ff; }
+        #console-output .result { color: #e8e8e8; }
+        #console-output .stdout { color: #b6b6b6; }
+        #console-output .err    { color: #ff8080; }
+        #console-output .note   { color: #777; font-style: italic; }
+
+        #console-inputrow {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            border-top: 1px solid #3a3a3a;
+            background: #202020;
+            flex: 0 0 auto;
+        }
+
+        #console-prompt { color: #7fb2ff; }
+
+        #console-input {
+            flex: 1 1 auto;
+            background: transparent;
+            border: none;
+            outline: none;
+            color: #f0f0f0;
+            font-family: inherit;
+            font-size: inherit;
+        }
+
+        #console-input::placeholder { color: #5a5a5a; }
+
+        /* Keep the canvas clear of the console while it is open. */
+        body.console-open #canvas { padding-bottom: 280px; }
+
         /* Collapsed sidebar indicator */
         body.sidebar-mode::after {
             content: '';
@@ -860,9 +959,28 @@
             <button id="undo-btn" title="Undo (Cmd/Ctrl-Z)">↶ Undo</button>
             <button id="redo-btn" title="Redo (Cmd/Ctrl-Shift-Z)">↷ Redo</button>
             <button id="create-btn" title="Create new object">+ Object</button>
+            <button id="console-btn" title="Python console: evaluate code against the live patcher (`p`)">&gt;_ Console</button>
             <div id="status" class="disconnected">
                 <span class="status-text">Connecting...</span>
             </div>
+        </div>
+    </div>
+
+    <!-- Python console. Talks to the REPL server on port+2 over its own
+         websocket, using the same session token already injected into this
+         page -- so there is nothing to copy and no second terminal. -->
+    <div id="console-panel" aria-hidden="true">
+        <div id="console-header">
+            <span id="console-title">Python console</span>
+            <span id="console-status">connecting...</span>
+            <button id="console-clear" type="button" title="Clear output">Clear</button>
+            <button id="console-close" type="button" title="Close (Esc)">&times;</button>
+        </div>
+        <div id="console-output" role="log" aria-live="polite"></div>
+        <div id="console-inputrow">
+            <span id="console-prompt">&gt;&gt;&gt;</span>
+            <input id="console-input" type="text" spellcheck="false" autocomplete="off"
+                   placeholder="p.add_textbox('cycle~ 440')   --  Up/Down for history">
         </div>
     </div>
 

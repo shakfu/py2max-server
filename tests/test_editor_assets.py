@@ -77,6 +77,21 @@ def _strip_block_comments(text: str) -> str:
     return "".join(out)
 
 
+def _strip_line_comments(text: str) -> str:
+    """Drop ``//`` comments from a small extracted block.
+
+    Applied only to isolated handler bodies, never whole-file: ``//`` also
+    appears inside string literals such as URLs. Needed because a check for a
+    call like ``preventDefault`` otherwise matches the prose in a comment
+    *explaining* that call, and passes after the call itself is deleted.
+    """
+    out = []
+    for line in text.splitlines():
+        marker = line.find("//")
+        out.append(line if marker == -1 else line[:marker])
+    return "\n".join(out)
+
+
 def _balanced_block(text: str, from_index: int) -> str:
     """Return the ``{...}`` block that opens at or after ``from_index``.
 
@@ -225,6 +240,55 @@ def test_straighten_settles_sources_before_destinations():
         "unreached boxes are seeded before the root pass drains; downstream "
         "boxes would align against sources that have not moved yet"
     )
+
+
+def test_console_is_built_into_the_editor():
+    """The console must live in the page, not require a separate client.
+
+    The standalone terminal REPL was removed because it needed a second
+    terminal and a hand-copied token. The replacement authenticates with the
+    token already injected into this page and talks to the same RPC server.
+    """
+    js = _js()
+    html = (STATIC / "interactive.html").read_text(encoding="utf-8")
+
+    assert 'id="console-panel"' in html
+    assert 'id="console-btn"' in html
+
+    block = _balanced_block(js, js.index("connectConsole() {"))
+    assert "PY2MAX_SESSION_TOKEN" in block, "console does not reuse the page token"
+    assert "+ 2" in block, "console does not target the RPC port (http port + 2)"
+
+
+def test_console_tab_is_intercepted_for_completion():
+    """Tab must be preventDefault'd, or the browser just moves focus away.
+
+    Without it the key never reaches the completion request and Tab silently
+    tabs out of the console instead of completing.
+    """
+    js = _js()
+    # Comments stripped: the branch carries a comment explaining the
+    # preventDefault, which made an earlier version of this test pass even with
+    # the call deleted.
+    block = _strip_line_comments(_balanced_block(js, js.index("initializeConsole() {")))
+
+    assert "'Tab'" in block, "console does not handle Tab at all"
+    tab_branch = block[block.index("'Tab'") : block.index("'Enter'")]
+    assert "preventDefault()" in tab_branch, (
+        "Tab is handled but not preventDefault'd; focus will leave the input"
+    )
+    assert "requestCompletion" in tab_branch
+
+
+def test_console_input_does_not_leak_canvas_shortcuts():
+    """Typing in the console must not trigger the canvas key handlers.
+
+    The canvas binds bare keys (f to fit, space to pan, Delete to remove the
+    selection), so an unstopped keydown would delete objects while you type.
+    """
+    js = _js()
+    block = _balanced_block(js, js.index("initializeConsole() {"))
+    assert "stopPropagation" in block
 
 
 def test_both_port_placement_modes_are_offered():

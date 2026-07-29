@@ -269,6 +269,7 @@ class InteractiveEditor {
         }
 
         this.initializeSidebarResize();
+        this.initializeConsole();
 
         // Port placement is a rendering preference, so it applies on change
         // rather than waiting for Apply Layout. Nothing in the patch moves --
@@ -2341,6 +2342,254 @@ class InteractiveEditor {
 
         const note = blocked ? `, ${blocked} blocked` : '';
         this.updateInfo(`Straightened ${moves.length} object${moves.length === 1 ? '' : 's'}${note}`);
+    }
+
+    /**
+     * Python console, wired to the REPL server on port+2.
+     *
+     * That server already speaks auth/init/eval over its own websocket, and the
+     * session token guarding it is the same one injected into this page -- so
+     * the console needs no server-side changes, no token to copy and no second
+     * terminal. It replaces the standalone terminal client entirely.
+     *
+     * The socket is opened lazily, the first time the panel is shown: most
+     * sessions never evaluate anything, and an unused connection would keep an
+     * eval-capable channel open for no reason.
+     */
+    initializeConsole() {
+        this.consoleHistory = [];
+        this.consoleHistoryPos = 0;
+        this.consoleWs = null;
+
+        const panel = document.getElementById('console-panel');
+        const input = document.getElementById('console-input');
+        if (!panel || !input) return;
+
+        const toggleBtn = document.getElementById('console-btn');
+        if (toggleBtn) {
+            toggleBtn.addEventListener('click', () => this.toggleConsole());
+        }
+
+        const closeBtn = document.getElementById('console-close');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => this.toggleConsole(false));
+        }
+
+        const clearBtn = document.getElementById('console-clear');
+        if (clearBtn) {
+            clearBtn.addEventListener('click', () => {
+                const out = document.getElementById('console-output');
+                if (out) out.textContent = '';
+            });
+        }
+
+        input.addEventListener('keydown', (e) => {
+            // The canvas has single-key shortcuts (f, space, Delete); typing in
+            // the console must never trigger them.
+            e.stopPropagation();
+
+            if (e.key === 'Tab') {
+                // Must preventDefault: Tab's default action moves focus out of
+                // the input, so without this the key never reaches completion.
+                e.preventDefault();
+                this.requestCompletion(input);
+            } else if (e.key === 'Enter') {
+                const code = input.value;
+                input.value = '';
+                this.consoleEval(code);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                this.recallHistory(-1, input);
+            } else if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                this.recallHistory(1, input);
+            } else if (e.key === 'Escape') {
+                this.toggleConsole(false);
+            }
+        });
+    }
+
+    toggleConsole(force) {
+        const panel = document.getElementById('console-panel');
+        if (!panel) return;
+
+        const show = force === undefined ? !panel.classList.contains('visible') : force;
+        panel.classList.toggle('visible', show);
+        panel.setAttribute('aria-hidden', show ? 'false' : 'true');
+        document.body.classList.toggle('console-open', show);
+
+        if (show) {
+            this.connectConsole();
+            const input = document.getElementById('console-input');
+            if (input) input.focus();
+        }
+    }
+
+    setConsoleStatus(text, cls) {
+        const el = document.getElementById('console-status');
+        if (!el) return;
+        el.textContent = text;
+        el.className = cls || '';
+    }
+
+    consolePrint(text, cls) {
+        const out = document.getElementById('console-output');
+        if (!out || text === null || text === undefined || text === '') return;
+        const line = document.createElement('div');
+        line.className = cls || '';
+        line.textContent = text;
+        out.appendChild(line);
+        out.scrollTop = out.scrollHeight;
+    }
+
+    connectConsole() {
+        if (this.consoleWs &&
+            (this.consoleWs.readyState === WebSocket.OPEN ||
+             this.consoleWs.readyState === WebSocket.CONNECTING)) {
+            return;
+        }
+
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        // HTTP on port, editor websocket on port+1, REPL server on port+2.
+        const replPort = parseInt(window.location.port) + 2;
+        const url = `${protocol}//${window.location.hostname}:${replPort}`;
+
+        this.setConsoleStatus('connecting...');
+        const ws = new WebSocket(url);
+        this.consoleWs = ws;
+
+        ws.onopen = () => {
+            ws.send(JSON.stringify({
+                type: 'auth',
+                token: window.PY2MAX_SESSION_TOKEN || ''
+            }));
+        };
+
+        ws.onmessage = (event) => {
+            let msg;
+            try {
+                msg = JSON.parse(event.data);
+            } catch (err) {
+                return;
+            }
+
+            if (msg.type === 'auth_success') {
+                this.setConsoleStatus('connected', 'ready');
+                ws.send(JSON.stringify({ type: 'init' }));
+                return;
+            }
+
+            if (msg.type === 'init_response') {
+                const info = msg.info || {};
+                this.consolePrint(
+                    `${info.patcher_path || 'Untitled'} -- ` +
+                    `${info.num_objects || 0} objects, ${info.num_connections || 0} connections`,
+                    'note'
+                );
+                this.consolePrint(
+                    "`p` is the patcher. commands(): list helpers. " +
+                    'Changes appear in the editor; press Save to write them.',
+                    'note'
+                );
+                return;
+            }
+
+            if (msg.type === 'completions') {
+                this.applyCompletions(msg);
+                return;
+            }
+
+            if (msg.type === 'error' && !this.consoleReady) {
+                // An auth failure arrives before anything else.
+                this.setConsoleStatus('auth failed', 'error');
+            }
+
+            if (msg.type === 'result') {
+                this.consolePrint(msg.display, 'stdout');
+                this.consolePrint(msg.result, 'result');
+            } else if (msg.type === 'error') {
+                this.consolePrint(msg.traceback || msg.error, 'err');
+            }
+
+            // No refresh needed here: the REPL server pushes fresh state onto
+            // the editor's own socket after every eval, so the canvas updates
+            // in every open browser rather than only the one that ran the code.
+        };
+
+        ws.onclose = () => {
+            this.setConsoleStatus('disconnected', 'error');
+        };
+
+        ws.onerror = () => {
+            this.setConsoleStatus('connection failed', 'error');
+        };
+    }
+
+    /**
+     * Ask the console server what the identifier before the caret could be.
+     * Only the text up to the caret is sent, so completing mid-line works.
+     */
+    requestCompletion(input) {
+        if (!this.consoleWs || this.consoleWs.readyState !== WebSocket.OPEN) return;
+        const text = input.value.slice(0, input.selectionStart);
+        this.consoleWs.send(JSON.stringify({ type: 'complete', text }));
+    }
+
+    /**
+     * Apply completions the way a terminal REPL does: a unique match is
+     * inserted, several matches extend to their common prefix and print the
+     * candidates, and no match does nothing.
+     */
+    applyCompletions(msg) {
+        const input = document.getElementById('console-input');
+        const matches = (msg && msg.matches) || [];
+        if (!input || matches.length === 0) return;
+
+        const token = msg.token || '';
+        const common = matches.reduce((acc, m) => {
+            let i = 0;
+            while (i < acc.length && i < m.length && acc[i] === m[i]) i++;
+            return acc.slice(0, i);
+        });
+
+        if (common.length > token.length) {
+            const caret = input.selectionStart;
+            const head = input.value.slice(0, caret - token.length);
+            const tail = input.value.slice(caret);
+            input.value = head + common + tail;
+            const pos = head.length + common.length;
+            input.setSelectionRange(pos, pos);
+        }
+
+        if (matches.length > 1) {
+            this.consolePrint(matches.join('   '), 'note');
+        }
+    }
+
+    consoleEval(code) {
+        if (!code.trim()) return;
+
+        this.consolePrint(`>>> ${code}`, 'echo');
+        this.consoleHistory.push(code);
+        this.consoleHistoryPos = this.consoleHistory.length;
+
+        if (!this.consoleWs || this.consoleWs.readyState !== WebSocket.OPEN) {
+            this.consolePrint('Not connected to the console server.', 'err');
+            return;
+        }
+        this.consoleWs.send(JSON.stringify({ type: 'eval', code, mode: 'exec' }));
+    }
+
+    recallHistory(direction, input) {
+        if (this.consoleHistory.length === 0) return;
+        this.consoleHistoryPos = Math.max(
+            0, Math.min(this.consoleHistory.length, this.consoleHistoryPos + direction)
+        );
+        input.value = this.consoleHistory[this.consoleHistoryPos] || '';
+        // Put the caret at the end rather than wherever it happened to be.
+        window.requestAnimationFrame(() => {
+            input.setSelectionRange(input.value.length, input.value.length);
+        });
     }
 
     autoLayout() {

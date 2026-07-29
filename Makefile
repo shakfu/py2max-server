@@ -3,9 +3,9 @@
 
 .PHONY: help all build test test-verbose coverage lint format typecheck \
 		qa check install dev clean reset ci check-wheel publish-test publish \
-		serve repl demo
+		serve demo
 
-# Ports: HTTP on $(PORT), WebSocket on $(PORT)+1, REPL on $(PORT)+2.
+# Ports: HTTP on $(PORT), WebSocket on $(PORT)+1, console on $(PORT)+2.
 PORT ?= 8000
 # Patch served by `make serve`; override with PATCH=<file.maxpat>.
 PATCH ?= examples/example.maxpat
@@ -55,13 +55,6 @@ serve: ## Serve a patch in the browser editor (default PATCH=examples/example.ma
 		exit 2; }
 	@echo "Serving $(PATCH) (auto-save off -- press Save in the editor to write)"
 	@uv run py2max-server serve "$(PATCH)" --port $(PORT)
-
-repl: ## Connect a REPL client to a running server (make repl TOKEN=... [PORT=8000])
-	@test -n "$(TOKEN)" || { \
-		echo "usage: make repl TOKEN=<session-token> [PORT=8000]"; \
-		echo "the server prints the token on startup (or set PY2MAX_REPL_TOKEN)"; \
-		exit 2; }
-	@uv run py2max-server repl localhost:$$(($(PORT) + 2)) --token "$(TOKEN)"
 
 demo: ## Serve a throwaway copy of the example, leaving the tracked file alone
 	@mkdir -p $(dir $(DEMO_PATCH))

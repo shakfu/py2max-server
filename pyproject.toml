@@ -7,7 +7,7 @@ authors = [
 maintainers = [
     { name = "Shakeeb Alireza", email = "shakfu@users.noreply.github.com" }
 ]
-version = "0.2.2"
+version = "0.3.0"
 readme = "README.md"
 requires-python = ">=3.9"
 keywords = ["Max", "maxpat", "py2max", "websocket", "repl"]
@@ -32,7 +32,6 @@ dependencies = [
     # AttributeError, since every rect arrives from JSON as a plain list.
     "py2max>=0.4.1",
     "websockets>=12.0",
-    "ptpython>=3.0.0",
 ]
 
 [project.scripts]

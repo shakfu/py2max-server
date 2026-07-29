@@ -775,3 +775,46 @@ class TestPortLabels:
         # No maxref entry -> no labels, but the box still serializes fine.
         assert "inlet_labels" not in box
         assert box["text"] == "zzznotanobject~ 1"
+
+
+class TestBreadcrumbTermination:
+    """The parent walk that builds the breadcrumb must always terminate.
+
+    It had no guard, so any object whose ``_parent`` never resolved to None --
+    a self-referential chain, or a test double that auto-creates attributes --
+    span forever and took the server's event loop with it. That is exactly how
+    it was found: adding a state push to ``handle_eval`` hung the suite.
+    """
+
+    def test_self_referential_parent_does_not_hang(self):
+        from py2max_server.websocket import get_patcher_state_json
+
+        class Cyclic:
+            title = "loop"
+            _boxes: list = []
+            _lines: list = []
+
+            def __init__(self):
+                self._parent = self  # points at itself
+
+        state = get_patcher_state_json(Cyclic())
+        assert state["type"] == "update"
+        assert len(state["patcher_path"]) == 1
+
+    def test_absurdly_deep_nesting_is_bounded(self):
+        from py2max_server.websocket import MAX_PATCHER_DEPTH, get_patcher_state_json
+
+        class Level:
+            _boxes: list = []
+            _lines: list = []
+
+            def __init__(self, parent, name):
+                self._parent = parent
+                self.title = name
+
+        node = None
+        for i in range(MAX_PATCHER_DEPTH * 3):
+            node = Level(node, f"p{i}")
+
+        state = get_patcher_state_json(node)
+        assert len(state["patcher_path"]) <= MAX_PATCHER_DEPTH

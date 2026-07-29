@@ -1,17 +1,16 @@
-"""Interactive server and REPL for py2max.
+"""Interactive browser editor for py2max patches.
 
-This package provides WebSocket-based server and REPL functionality
-for real-time interactive editing of Max patches generated with py2max.
+Serves a Max patch to a browser-based editor that syncs over WebSocket, with a
+Python console for evaluating code against the live patcher.
 
 Modules:
-- websocket: WebSocket server for bidirectional communication
-- repl: Interactive REPL using ptpython
-- client: Remote REPL client
-- inline: Inline REPL with background server
-- rpc: Remote procedure call server for REPL
+- websocket: HTTP + WebSocket server backing the editor
+- rpc: console server (code evaluation), on its own port
+- repl: command helpers exposed in the console namespace
+- cli: the ``py2max-server serve`` entry point
 """
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"
 
 from .websocket import (
     InteractivePatcherServer,
@@ -19,15 +18,7 @@ from .websocket import (
     get_patcher_state_json,
     serve_interactive,
 )
-from .repl import AutoSyncWrapper, ReplCommands, start_repl, start_repl_with_refresh
-from .client import ReplClient, start_repl_client
-from .inline import (
-    BackgroundServerREPL,
-    restore_console_logging,
-    setup_file_logging,
-    start_background_server_repl,
-    start_inline_repl,
-)
+from .repl import ReplCommands
 from .rpc import ReplServer, start_repl_server
 
 __all__ = [
@@ -36,21 +27,8 @@ __all__ = [
     "InteractiveWebSocketHandler",
     "get_patcher_state_json",
     "serve_interactive",
-    # REPL
-    "AutoSyncWrapper",
+    # Console
     "ReplCommands",
-    "start_repl",
-    "start_repl_with_refresh",
-    # Client
-    "ReplClient",
-    "start_repl_client",
-    # Inline
-    "BackgroundServerREPL",
-    "start_inline_repl",
-    "start_background_server_repl",
-    "setup_file_logging",
-    "restore_console_logging",
-    # RPC
     "ReplServer",
     "start_repl_server",
 ]

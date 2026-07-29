@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+import rlcompleter
 import secrets
 import sys
 import traceback as tb
@@ -19,6 +21,14 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 if TYPE_CHECKING:
     from py2max.core import Patcher
     from .websocket import InteractivePatcherServer
+
+# The completable chunk at the end of a line: a dotted identifier, so
+# `x = p.add_te` completes `p.add_te` and not the whole line.
+_COMPLETION_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]*)*$")
+
+# Upper bound on returned completions -- `dir()` on some objects is long, and
+# an unbounded list is neither useful to read nor cheap to ship.
+MAX_COMPLETIONS = 200
 
 try:
     import websockets
@@ -153,6 +163,8 @@ class ReplServer:
                 await self.handle_init(websocket)
             elif msg_type == "eval":
                 await self.handle_eval(websocket, data)
+            elif msg_type == "complete":
+                await self.handle_complete(websocket, data)
             else:
                 await websocket.send(
                     json.dumps(
@@ -181,6 +193,40 @@ class ReplServer:
         }
 
         await websocket.send(json.dumps({"type": "init_response", "info": info}))
+
+    async def handle_complete(self, websocket: ServerConnection, data: dict):
+        """Return completions for the identifier at the end of ``text``.
+
+        Backed by stdlib ``rlcompleter`` against the same namespace ``eval``
+        uses, so the console completes exactly the names it can actually
+        resolve -- ``p.``, the command helpers, builtins and keywords.
+
+        Only the trailing dotted identifier is completed; ``rlcompleter``
+        matches on a plain ``name.name.name`` pattern, so it will not evaluate
+        a call like ``foo().bar`` while resolving an attribute.
+        """
+        text = data.get("text", "") or ""
+        match = _COMPLETION_TOKEN.search(text)
+        token = match.group(0) if match else ""
+
+        matches: list[str] = []
+        try:
+            completer = rlcompleter.Completer(self.namespace)
+            seen = set()
+            for state in range(MAX_COMPLETIONS):
+                item = completer.complete(token, state)
+                if item is None:
+                    break
+                if item not in seen:
+                    seen.add(item)
+                    matches.append(item)
+        except Exception:
+            # Completion is a convenience; never let it break the session.
+            matches = []
+
+        await websocket.send(
+            json.dumps({"type": "completions", "token": token, "matches": matches})
+        )
 
     async def handle_eval(self, websocket: ServerConnection, data: dict):
         """Handle code evaluation request."""
@@ -269,6 +315,24 @@ class ReplServer:
             # Restore stdout/stderr
             sys.stdout = old_stdout
             sys.stderr = old_stderr
+
+        # Evaluated code mutates the patcher directly, and this server has no
+        # editor clients of its own. Push fresh state onto the editor's socket
+        # so every open browser reflects the change, instead of showing the
+        # pre-eval patch until something else happens to trigger an update.
+        await self.notify_editors()
+
+    async def notify_editors(self) -> None:
+        """Broadcast current patcher state to the editor's websocket clients."""
+        handler = getattr(self.server, "handler", None)
+        if handler is None:
+            return
+        try:
+            from .websocket import get_patcher_state_json
+
+            await handler.broadcast(get_patcher_state_json(handler.patcher))
+        except Exception as e:  # never let a refresh failure break evaluation
+            print(f"Could not refresh editors after eval: {e}")
 
 
 async def start_repl_server(

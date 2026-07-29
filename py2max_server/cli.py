@@ -1,28 +1,31 @@
 """Command line interface for py2max-server.
 
-Provides the ``serve`` and ``repl`` subcommands (formerly ``py2max serve`` /
-``py2max repl``) for the interactive WebSocket editor and remote REPL.
+Provides the ``serve`` subcommand, which runs the browser editor and its
+Python console.
+
+There was once a separate ``repl`` subcommand and a single-terminal ``--repl``
+mode. Both are gone: the console lives in the editor page, which authenticates
+with the token already embedded there, so it needs no second terminal and no
+token to copy.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import sys
 from pathlib import Path
 
 from py2max import Patcher
 
-from . import serve_interactive, start_background_server_repl, start_repl_server
-from .client import start_repl_client
+from . import serve_interactive, start_repl_server
 
 
 def _load_patcher(input_path: Path) -> Patcher:
     """Load a patch bound to its own path, so saving writes back to it.
 
     ``save_to`` is what sets ``Patcher._path``; without it ``patcher.save()``
-    (and therefore both ``save()`` in the REPL and the server's auto-save)
+    (and therefore both the editor's Save button and the server's auto-save)
     silently does nothing and every edit is lost on exit.
     """
     return Patcher.from_file(input_path, save_to=str(input_path))
@@ -49,27 +52,10 @@ def cmd_serve(args: argparse.Namespace) -> int:
         if auto_save:
             print(f"Auto-save ON: edits are written back to {input_path}")
         else:
-            print("Auto-save OFF: use Save in the editor (or save() in the REPL)")
-        if args.repl:
-            print("REPL mode enabled - type 'commands()' for help")
+            print("Auto-save OFF: press Save in the editor to write changes")
         print("Press Ctrl+C to stop")
 
         async def run_server():
-            # Single-terminal mode: background server + inline REPL with log redirect.
-            if args.repl and args.log_file:
-                log_file_path = Path(args.log_file)
-                await start_background_server_repl(
-                    patcher,
-                    port=args.port,
-                    log_file=log_file_path,
-                    auto_open=not args.no_open,
-                    auto_save=auto_save,
-                )
-                return
-
-            # Client-server mode (default). auto_save must be passed through
-            # explicitly -- both here and to the inline mode above -- or the
-            # banner and the actual behaviour drift apart.
             server = await serve_interactive(
                 patcher,
                 args.port,
@@ -77,36 +63,27 @@ def cmd_serve(args: argparse.Namespace) -> int:
                 auto_save=auto_save,
             )
 
-            repl_port = args.port + 2  # HTTP=port, WS=port+1, REPL=port+2
-            repl_server = await start_repl_server(patcher, server, port=repl_port)
-            token = getattr(server.handler, "session_token", None)
-            connect_cmd = f"py2max-server repl localhost:{repl_port}"
-            if token:
-                connect_cmd += f" --token {token}"
+            # HTTP=port, editor WebSocket=port+1, console=port+2. The editor
+            # page opens the console socket itself when you press Console.
+            console_port = args.port + 2
+            console_server = await start_repl_server(
+                patcher, server, port=console_port
+            )
 
             print()
             print("=" * 70)
-            print("REPL server started")
-            print(f"Connect with: {connect_cmd}")
+            print(f"Python console available in the editor (port {console_port})")
+            print("Press the Console button in the toolbar")
             print("=" * 70)
             print()
-
-            if args.repl:
-                print("WARNING: --repl flag without --log-file is deprecated.")
-                print("For single-terminal mode, use: --repl --log-file server.log")
-                print(
-                    "For client-server mode (recommended), in a separate terminal run:"
-                )
-                print(f"  {connect_cmd}")
-                print()
 
             try:
                 while True:
                     await asyncio.sleep(1)
             except KeyboardInterrupt:
                 print("\nStopping server...")
-                repl_server.close()
-                await repl_server.wait_closed()
+                console_server.close()
+                await console_server.wait_closed()
                 await server.stop()
 
         asyncio.run(run_server())
@@ -123,63 +100,29 @@ def cmd_serve(args: argparse.Namespace) -> int:
         return 1
 
 
-def cmd_repl(args: argparse.Namespace) -> int:
-    """Connect to a remote REPL server."""
-    server = args.server
-    if ":" in server:
-        host, port_str = server.rsplit(":", 1)
-        try:
-            port = int(port_str)
-        except ValueError:
-            print(f"Invalid port number: {port_str}", file=sys.stderr)
-            return 1
-    else:
-        host = server
-        port = 9000
-
-    # Resolve the session token (CLI flag takes precedence over env var).
-    token = args.token or os.environ.get("PY2MAX_REPL_TOKEN")
-    if not token:
-        print(
-            "Error: a session token is required. Pass --token <token> "
-            "(printed by the server) or set PY2MAX_REPL_TOKEN.",
-            file=sys.stderr,
-        )
-        return 1
-
-    try:
-        return asyncio.run(start_repl_client(host, port, token=token))
-    except KeyboardInterrupt:
-        print("\nDisconnected.")
-        return 0
-    except Exception as e:
-        print(f"Error: {e}", file=sys.stderr)
-        return 1
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="py2max-server",
-        description="Interactive WebSocket server and remote REPL for py2max patches.",
+        description="Interactive browser editor for py2max patches.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     serve_parser = subparsers.add_parser(
-        "serve", help="Start interactive server with live preview"
+        "serve", help="Start the browser editor for a patch"
     )
     serve_parser.add_argument("input", help="Input .maxpat file")
     serve_parser.add_argument(
         "--port",
         type=int,
         default=8000,
-        help="HTTP server port (default: 8000, WebSocket on port+1)",
+        help="HTTP server port (default: 8000; WebSocket on port+1, console on port+2)",
     )
     serve_parser.add_argument(
         "--no-open", action="store_true", help="Don't automatically open browser"
     )
     # Off by default: serving a patch should not rewrite it. Edits are saved on
-    # request (Save in the editor, save() in the REPL); opt in here to have them
-    # written back automatically a couple of seconds after each change.
+    # request (Save in the editor); opt in here to have them written back
+    # automatically a couple of seconds after each change.
     serve_parser.add_argument(
         "--auto-save",
         action="store_true",
@@ -189,32 +132,7 @@ def build_parser() -> argparse.ArgumentParser:
     # the default. Still honoured as a hard off, so `--auto-save --no-save`
     # resolves the contradiction in favour of not touching the file.
     serve_parser.add_argument("--no-save", action="store_true", help=argparse.SUPPRESS)
-    serve_parser.add_argument(
-        "--repl",
-        action="store_true",
-        help="Start interactive REPL for live patch editing",
-    )
-    serve_parser.add_argument(
-        "--log-file",
-        help="Redirect server logs to file "
-        "(enables single-terminal REPL mode when used with --repl)",
-    )
     serve_parser.set_defaults(func=cmd_serve)
-
-    repl_parser = subparsers.add_parser("repl", help="Connect to remote REPL server")
-    repl_parser.add_argument(
-        "server",
-        nargs="?",
-        default="localhost:9000",
-        help="Server address (default: localhost:9000)",
-    )
-    repl_parser.add_argument(
-        "--token",
-        default=None,
-        help="Session token printed by the server "
-        "(or set PY2MAX_REPL_TOKEN). Required for authentication.",
-    )
-    repl_parser.set_defaults(func=cmd_repl)
 
     return parser
 

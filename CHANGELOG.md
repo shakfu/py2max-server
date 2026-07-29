@@ -4,6 +4,34 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-29
+
+The REPL moves into the browser. The standalone terminal client is gone, and
+with it the two things that made it awkward to use: copying a session token by
+hand and keeping a second terminal open. Pressing **Console** in the editor now
+gives a Python prompt attached to the live patcher, with tab completion.
+
+This is a **breaking change** for anyone running `py2max-server repl` or
+importing `ReplClient`, `start_repl_client`, `start_repl`,
+`start_repl_with_refresh`, `AutoSyncWrapper` or `BackgroundServerREPL`. The
+package is ~1000 lines lighter and no longer depends on `ptpython`.
+
+### Added
+
+- **Python console in the editor.** A Console button in the toolbar opens a prompt attached to the live patcher, with `p` bound to the `Patcher` and the usual helpers (`save`, `info`, `layout`, ...). It authenticates with the session token already embedded in the editor page and talks to the same RPC server the terminal client used, so there is nothing to copy and no second terminal. Output, tracebacks and Up/Down history all work in-page, and evaluated changes now push fresh state to every open editor rather than leaving the canvas showing the pre-eval patch.
+
+- **Tab completion in the console**, resolved server-side by stdlib `rlcompleter` against the same namespace `eval` uses -- so it completes exactly the names that will actually resolve: `p.` attributes, the command helpers, builtins and keywords. Only the trailing dotted identifier is completed, so `x = p.opt` works mid-line. A unique match is inserted, several matches extend to their common prefix and list the candidates, and completion failures are swallowed rather than allowed to break the session.
+
+### Removed
+
+- **The standalone terminal REPL.** `py2max-server repl`, the `--repl` / `--log-file` single-terminal mode, `ReplClient`, `start_repl_client`, `start_repl`, `start_repl_with_refresh`, `AutoSyncWrapper`, `BackgroundServerREPL` and the `ptpython` dependency are all gone, along with `client.py` and `inline.py` (~1000 lines). The console above replaces them and removes the two things that made the terminal REPL awkward: copying a session token by hand and running a second terminal.
+
+  `ReplCommands` stays -- it backs the console namespace. Anyone importing the removed names or scripting `py2max-server repl` will need to move to the in-editor console.
+
+### Fixed
+
+- **The breadcrumb walk always terminates.** Building the patcher path followed `_parent` links with no bound, so a self-referential chain would spin forever and take the event loop with it. It is now depth-limited and cycle-guarded. Found when pushing state after console evaluation hung the test suite against a mocked server whose attributes auto-create.
+
 ## [0.2.2]
 
 ### Added
@@ -20,6 +48,10 @@ All notable changes to this project are documented here. The format is based on 
 
   The legacy `--no-save` flag is still accepted (hidden) so existing commands keep working, and still forces auto-save off, so `--auto-save --no-save` resolves in favour of not touching the file.
 
+- The layout sidebar's blue left border is gone; its drop shadow already separates it from the canvas.
+- The sidebar is resizable by dragging its left edge, with double-click to reset. The width lives in a `--sidebar-width` CSS variable so the panel, its hidden offset and the canvas padding stay in step, and it persists in `localStorage` next to the existing mode preference.
+- Slider readouts in the layout controls sit to the right of their slider instead of underneath it, hard against the left edge.
+
 ### Fixed
 
 - **Save writes back to the file being served.** The Save button called the *Save As* path, which serializes the patch and hands it to the browser -- so pressing Save produced a copy in `~/Downloads` and never touched the patch being edited. It now sends a `save` message; the server writes to its own path and replies `save_complete`, falling back to a browser Save As only when it has no path (an uploaded patch). With auto-save opt-in, this had left the editor unable to persist anything at all.
@@ -31,14 +63,6 @@ All notable changes to this project are documented here. The format is based on 
   The geometry now lives in a single `portCenterX()` helper. It had been duplicated across five sites -- drawing, drag updates, animation interpolation and both patch cord endpoints -- which is how the drawn ports and the cords attached to them could drift apart.
 
 - **Opening the layout panel no longer rearranges the patch.** The toolbar's Auto-Layout button applied a layout the moment the controls became visible, so merely *looking* at them repositioned every object -- and with auto-save on, that reached disk about two seconds later. It was observed rewriting the tracked `examples/example.maxpat` with layout-engine coordinates (objects pushed to negative positions) without the user asking for anything. Applying a layout is now only ever the explicit "Apply Layout" button, and `tests/test_editor_assets.py` guards against a second call site reappearing.
-
-### Changed
-
-- The layout sidebar's blue left border is gone; its drop shadow already separates it from the canvas.
-
-- The sidebar is resizable by dragging its left edge, with double-click to reset. The width lives in a `--sidebar-width` CSS variable so the panel, its hidden offset and the canvas padding stay in step, and it persists in `localStorage` next to the existing mode preference.
-
-- Slider readouts in the layout controls sit to the right of their slider instead of underneath it, hard against the left edge.
 
 ## [0.2.1]
 

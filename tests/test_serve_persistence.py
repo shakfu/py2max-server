@@ -1,19 +1,21 @@
-"""End-to-end regression tests for the serve/REPL persistence path.
+"""End-to-end regression tests for the serve/console persistence path.
 
 These exist because the whole mocked suite passed while the feature's central
-promise -- "edit live, changes are saved" -- was broken in three separate ways:
+promise -- "edit live, changes are saved" -- was broken in two ways:
 
 1. ``cmd_serve`` loaded the patch with ``Patcher.from_file(path)`` and no
    ``save_to=``, so ``Patcher._path`` stayed ``None``, ``patcher.save()``
-   silently did nothing, and every REPL/browser edit was lost on exit.
+   silently did nothing, and every console/browser edit was lost on exit.
 2. ``serve_interactive`` was called without ``auto_save``, which defaults to
    False -- so the "Auto-save enabled" banner was untrue regardless of (1).
-3. The single-terminal ``--repl --log-file`` mode called ``Patcher.serve()``,
-   removed from py2max in v0.3.0, so that mode died on startup.
 
-The mocks hid all three: they never exercised a real ``from_file`` -> ``save()``
+The mocks hid both: they never exercised a real ``from_file`` -> ``save()``
 round trip. So these tests deliberately touch the real filesystem and the real
 websocket stack instead.
+
+(A third bug lived in the single-terminal ``--repl --log-file`` mode, which
+called a ``Patcher.serve()`` that py2max had removed. That mode is gone: the
+console is served in the editor page, so its tests went with it.)
 """
 
 import json
@@ -123,78 +125,6 @@ class TestAutoSaveWiring:
             self._capture(monkeypatch, ["--auto-save", "--no-save"], patch_file)
             is False
         )
-
-    def test_inline_mode_gets_the_same_setting(self, patch_file, monkeypatch):
-        """The single-terminal REPL path must not hardcode auto-save on."""
-        import py2max_server.cli as cli_mod
-
-        captured = {}
-
-        async def fake_background(patcher, port, log_file, auto_open, auto_save=False):
-            captured["auto_save"] = auto_save
-            raise KeyboardInterrupt
-
-        monkeypatch.setattr(cli_mod, "start_background_server_repl", fake_background)
-        cli_mod.cmd_serve(
-            build_parser().parse_args(
-                ["serve", str(patch_file), "--no-open", "--repl", "--log-file", "x.log"]
-            )
-        )
-        assert captured.get("auto_save") is False
-
-
-class TestInlineModeUsesLiveApi:
-    """Bug 3: the single-terminal mode called a py2max API that no longer exists."""
-
-    def test_patcher_serve_is_gone(self):
-        """Document the upstream removal this mode tripped over."""
-        assert not hasattr(Patcher, "serve")
-
-    def test_inline_mode_does_not_reference_patcher_serve(self):
-        import inspect
-
-        from py2max_server.inline import BackgroundServerREPL
-
-        src = inspect.getsource(BackgroundServerREPL._run_server)
-        assert "patcher.serve(" not in src
-        assert "serve_interactive" in src
-
-
-class TestBackgroundServerShutdown:
-    """``stop()`` must actually stop the background server, from another thread."""
-
-    def test_stop_releases_the_port_and_joins_the_thread(self, patch_file):
-        import socket
-        import threading
-        import time
-
-        from py2max_server.inline import BackgroundServerREPL
-
-        port = 8781
-        repl = BackgroundServerREPL(
-            _load_patcher(patch_file), port=port, auto_open=False
-        )
-        repl.server_thread = threading.Thread(target=repl._run_server, daemon=True)
-        repl.server_thread.start()
-
-        assert repl.ready_event.wait(timeout=10), "background server never started"
-
-        repl.stop()
-
-        # The old stop() cancelled tasks from the wrong thread and never woke
-        # the loop, so the thread stayed alive and the port stayed bound.
-        repl.server_thread.join(timeout=10)
-        assert not repl.server_thread.is_alive(), "server thread outlived stop()"
-
-        for _ in range(50):  # allow the listening socket a moment to clear
-            with socket.socket() as s:
-                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                try:
-                    s.bind(("localhost", port))
-                    return
-                except OSError:
-                    time.sleep(0.1)
-        pytest.fail(f"port {port} still bound after stop()")
 
 
 class TestRemoteReplRoundTrip:

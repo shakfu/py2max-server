@@ -17,13 +17,21 @@ def patcher(tmp_path):
 
 
 @pytest.fixture
-def mock_interactive_server():
-    """Create a mock InteractivePatcherServer."""
+def mock_interactive_server(patcher):
+    """Create a mock InteractivePatcherServer.
+
+    ``handler.patcher`` is the real Patcher and ``handler.broadcast`` an
+    AsyncMock because ``handle_eval`` now pushes fresh state to editor clients
+    after evaluating. Left as bare MagicMocks, the state builder walked
+    ``_parent`` into an endless chain of auto-created mocks and the suite hung.
+    """
     server = MagicMock()
     server.port = 8000
     server.ws_port = 8001
     server.handler = MagicMock()
     server.handler.clients = set()
+    server.handler.patcher = patcher
+    server.handler.broadcast = AsyncMock()
     server.notify_update = AsyncMock()
     return server
 
@@ -404,3 +412,73 @@ class TestReplServerAuth:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestCompletion:
+    """Tab completion resolves against the same namespace ``eval`` uses."""
+
+    @pytest.mark.asyncio
+    async def test_completes_patcher_attributes(
+        self, patcher, mock_interactive_server, mock_websocket
+    ):
+        from py2max_server.rpc import ReplServer
+
+        server = ReplServer(patcher, mock_interactive_server)
+        await server.handle_complete(mock_websocket, {"text": "p.add_te"})
+
+        reply = json.loads(mock_websocket.send.call_args[0][0])
+        assert reply["type"] == "completions"
+        assert reply["token"] == "p.add_te"
+        assert "p.add_textbox(" in reply["matches"]
+
+    @pytest.mark.asyncio
+    async def test_completes_command_helpers(
+        self, patcher, mock_interactive_server, mock_websocket
+    ):
+        from py2max_server.rpc import ReplServer
+
+        server = ReplServer(patcher, mock_interactive_server)
+        await server.handle_complete(mock_websocket, {"text": "opti"})
+
+        reply = json.loads(mock_websocket.send.call_args[0][0])
+        assert any(m.startswith("optimize") for m in reply["matches"]), reply["matches"]
+
+    @pytest.mark.asyncio
+    async def test_completes_only_the_trailing_token(
+        self, patcher, mock_interactive_server, mock_websocket
+    ):
+        """Mid-line completion must not try to complete the whole line."""
+        from py2max_server.rpc import ReplServer
+
+        server = ReplServer(patcher, mock_interactive_server)
+        await server.handle_complete(mock_websocket, {"text": "x = p.optimize_la"})
+
+        reply = json.loads(mock_websocket.send.call_args[0][0])
+        assert reply["token"] == "p.optimize_la"
+        assert "p.optimize_layout()" in reply["matches"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_name_returns_no_matches(
+        self, patcher, mock_interactive_server, mock_websocket
+    ):
+        from py2max_server.rpc import ReplServer
+
+        server = ReplServer(patcher, mock_interactive_server)
+        await server.handle_complete(mock_websocket, {"text": "definitely_not_here"})
+
+        reply = json.loads(mock_websocket.send.call_args[0][0])
+        assert reply["matches"] == []
+
+    @pytest.mark.asyncio
+    async def test_completion_never_raises_on_junk(
+        self, patcher, mock_interactive_server, mock_websocket
+    ):
+        """A convenience feature must not be able to kill the session."""
+        from py2max_server.rpc import ReplServer
+
+        server = ReplServer(patcher, mock_interactive_server)
+        for junk in ["", "   ", "((((", "p..", "1234", "p.'"]:
+            mock_websocket.send.reset_mock()
+            await server.handle_complete(mock_websocket, {"text": junk})
+            reply = json.loads(mock_websocket.send.call_args[0][0])
+            assert reply["type"] == "completions"

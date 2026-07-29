@@ -86,6 +86,11 @@ MAX_STRING_LENGTHS: dict[str, int] = {
 # Maximum size for an uploaded patch payload (bytes/chars of JSON text).
 MAX_CONTENT_LENGTH = 16 * 1024 * 1024
 
+# Hard ceiling on breadcrumb depth. Real patches nest a handful of levels deep;
+# this exists so a malformed or self-referential parent chain cannot spin the
+# event loop while building the trail.
+MAX_PATCHER_DEPTH = 64
+
 # File extensions the server-side file picker treats as openable patches.
 PATCH_EXTENSIONS = (".maxpat", ".maxhelp", ".amxd", ".rbnopat")
 
@@ -453,10 +458,17 @@ def get_patcher_state_json(patcher: Optional["Patcher"]) -> dict:
 
         lines.append(line_data)
 
-    # Build patcher path (breadcrumb trail)
+    # Build patcher path (breadcrumb trail). Bounded and cycle-guarded: this
+    # walks parent links in loaded patch data, and a self-referential or
+    # unexpectedly deep chain would otherwise spin here forever, taking the
+    # server's event loop with it.
     patcher_path: list[str] = []
     current: Any = patcher
-    while current:
+    seen: Set[int] = set()
+    while current is not None and len(patcher_path) < MAX_PATCHER_DEPTH:
+        if id(current) in seen:
+            break
+        seen.add(id(current))
         patcher_path.insert(0, _patcher_label(current))
         current = getattr(current, "_parent", None)
 
