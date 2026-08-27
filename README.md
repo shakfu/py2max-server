@@ -23,7 +23,9 @@ py2max-server serve my-patch.maxpat
 Opens a browser editor for the patch:
 
 - HTTP server on `http://localhost:8000`
+
 - WebSocket on `ws://localhost:8001`
+
 - Python console on `ws://localhost:8002` (used by the editor page itself)
 
 Use `--port` to move all three, and `--no-open` to skip launching a browser.
@@ -33,7 +35,9 @@ Use `--port` to move all three, and `--no-open` to skip launching a browser.
 **Serving a patch does not modify it.** Nothing is written until you ask:
 
 - **Save** writes back to the file being served.
+
 - **Save As** writes a copy elsewhere, through a browser file dialog.
+
 - `--auto-save` opts into writing edits back automatically, a couple of seconds after each change.
 
 Auto-save is off by default because an editor action you did not intend should not be able to reach disk.
@@ -41,12 +45,19 @@ Auto-save is off by default because an editor action you did not intend should n
 ### Editing
 
 - Drag objects to move them; rubber-band or shift-click to select several, then drag, resize or delete as a group.
+
 - Select an object to get resize handles on its right edge, bottom edge and bottom-right corner. Any object can be resized, though it matters most for UI objects like `scope~`, `function` and `live.gain~`; Max reasserts its own size for objects that are not resizable.
+
 - Drag from one port to another to connect; click a cord to select it.
+
 - Double-click empty canvas to create an object, with type-ahead over common Max objects.
+
 - Double-click an object to edit its text -- or, if it is a subpatcher, to descend into it. The breadcrumb walks back out, as does **Parent** and `Esc`.
+
 - `Delete` removes the selection. Undo/redo with Cmd/Ctrl-Z and Cmd/Ctrl-Shift-Z (or Cmd/Ctrl-Y), at any subpatcher depth.
+
 - `F` fits the patch to the window, the wheel zooms, and space-drag pans.
+
 - **Open** loads another `.maxpat` from the server; **Hide Comments** removes comment boxes from view without deleting them.
 
 There is no keyboard shortcut for saving -- use the **Save** button.
@@ -95,9 +106,7 @@ async def main():
 asyncio.run(main())
 ```
 
-`serve_interactive` starts the editor only. The console is a second server on
-its own port, so add `start_repl_server` if you want the Console button to
-connect -- the `serve` command does this for you:
+`serve_interactive` starts the editor only. The console is a second server on its own port, so add `start_repl_server` if you want the Console button to connect -- the `serve` command does this for you:
 
 ```python
 from py2max_server import serve_interactive, start_repl_server

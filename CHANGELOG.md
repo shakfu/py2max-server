@@ -6,8 +6,7 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [0.3.1]
 
-Objects can be resized in the editor. Additive only -- nothing in 0.3.0 changes
-behaviour.
+Objects can be resized in the editor. Additive only -- nothing in 0.3.0 changes behaviour.
 
 ### Added
 
@@ -27,15 +26,9 @@ behaviour.
 
 ## [0.3.0]
 
-The REPL moves into the browser. The standalone terminal client is gone, and
-with it the two things that made it awkward to use: copying a session token by
-hand and keeping a second terminal open. Pressing **Console** in the editor now
-gives a Python prompt attached to the live patcher, with tab completion.
+The REPL moves into the browser. The standalone terminal client is gone, and with it the two things that made it awkward to use: copying a session token by hand and keeping a second terminal open. Pressing **Console** in the editor now gives a Python prompt attached to the live patcher, with tab completion.
 
-This is a **breaking change** for anyone running `py2max-server repl` or
-importing `ReplClient`, `start_repl_client`, `start_repl`,
-`start_repl_with_refresh`, `AutoSyncWrapper` or `BackgroundServerREPL`. The
-package is ~1000 lines lighter and no longer depends on `ptpython`.
+This is a **breaking change** for anyone running `py2max-server repl` or importing `ReplClient`, `start_repl_client`, `start_repl`, `start_repl_with_refresh`, `AutoSyncWrapper` or `BackgroundServerREPL`. The package is ~1000 lines lighter and no longer depends on `ptpython`.
 
 ### Added
 
@@ -70,7 +63,9 @@ package is ~1000 lines lighter and no longer depends on `ptpython`.
   The legacy `--no-save` flag is still accepted (hidden) so existing commands keep working, and still forces auto-save off, so `--auto-save --no-save` resolves in favour of not touching the file.
 
 - The layout sidebar's blue left border is gone; its drop shadow already separates it from the canvas.
+
 - The sidebar is resizable by dragging its left edge, with double-click to reset. The width lives in a `--sidebar-width` CSS variable so the panel, its hidden offset and the canvas padding stay in step, and it persists in `localStorage` next to the existing mode preference.
+
 - Slider readouts in the layout controls sit to the right of their slider instead of underneath it, hard against the left edge.
 
 ### Fixed
@@ -87,13 +82,9 @@ package is ~1000 lines lighter and no longer depends on `ptpython`.
 
 ## [0.2.1]
 
-A repair release. Live editing did not persist: the served patcher was never
-bound to its own file, so both the REPL's `save()` and the advertised auto-save
-silently discarded every change. The single-terminal REPL mode had been dead
-since v0.3.0 of py2max removed the API it called.
+A repair release. Live editing did not persist: the served patcher was never bound to its own file, so both the REPL's `save()` and the advertised auto-save silently discarded every change. The single-terminal REPL mode had been dead since v0.3.0 of py2max removed the API it called.
 
-Requires py2max >= 0.4.1, which fixes rect handling for patches loaded from
-disk; without it any layout call on a served patch raises `AttributeError`.
+Requires py2max >= 0.4.1, which fixes rect handling for patches loaded from disk; without it any layout call on a served patch raises `AttributeError`.
 
 ### Fixed
 
