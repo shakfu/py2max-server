@@ -16,7 +16,7 @@ jobs:
 
     steps:
       - name: Checkout py2max-server
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: py2max-server
 
@@ -24,7 +24,7 @@ jobs:
       # sibling directory so uv can resolve it. Override the ref via the
       # PY2MAX_REF repository variable if you need a specific branch/tag.
       - name: Checkout py2max (core)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: shakfu/py2max
           ref: ${{ vars.PY2MAX_REF || 'main' }}
@@ -53,12 +53,12 @@ jobs:
 
     steps:
       - name: Checkout py2max-server
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: py2max-server
 
       - name: Checkout py2max (core)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: shakfu/py2max
           ref: ${{ vars.PY2MAX_REF || 'main' }}
@@ -91,12 +91,12 @@ jobs:
 
     steps:
       - name: Checkout py2max-server
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: py2max-server
 
       - name: Checkout py2max (core)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: shakfu/py2max
           ref: ${{ vars.PY2MAX_REF || 'main' }}
