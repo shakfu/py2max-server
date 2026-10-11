@@ -65,6 +65,9 @@ class TestReplCommands:
         assert "Objects: 2 boxes" in captured.out
         assert "Connections: 0 lines" in captured.out
         assert "Server:" in captured.out
+        layout = type(patcher._layout_mgr).__name__
+        assert layout.endswith("LayoutManager")
+        assert f"Layout: {layout}" in captured.out
 
     def test_info_command_verbose(self, repl_commands, patcher, capsys):
         """Test info(verbose=True) command with detailed output."""

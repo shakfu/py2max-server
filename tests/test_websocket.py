@@ -4,6 +4,7 @@ import asyncio
 import pytest
 
 from py2max import Patcher
+from py2max.utils import object_name
 
 
 class TestWebSocketServer:
@@ -154,7 +155,8 @@ class TestWebSocketHandler:
         # Check object was created
         assert len(p._boxes) == initial_count + 1
         new_box = p._boxes[-1]
-        assert new_box.text == "gain~"
+        # gain~ is a UI class: py2max >= 0.5 stores it in maxclass, not text.
+        assert object_name(new_box) == "gain~"
         assert new_box.patching_rect.x == 150
         assert new_box.patching_rect.y == 250
 
@@ -358,6 +360,29 @@ class TestWebSocketHandler:
 
         assert box.text == "cycle~ 880"
         assert any(m.get("type") == "update" for m in sent)
+
+    @pytest.mark.asyncio
+    async def test_edit_object_text_ignores_ui_box(self):
+        """A UI box has no text; an edit must not write one or touch undo."""
+        from py2max_server import InteractiveWebSocketHandler
+
+        p = Patcher("test.maxpat")
+        box = p.add_textbox("gain~")
+        handler = InteractiveWebSocketHandler(p)
+        sent = []
+
+        async def capture(msg):
+            sent.append(msg)
+
+        handler.broadcast = capture
+
+        await handler.handle_edit_object_text({"box_id": box.id, "text": "cycle~"})
+
+        assert box.maxclass == "gain~"
+        assert not box.text
+        assert "text" not in box.to_dict()["box"]
+        assert sent == []
+        assert not handler.undo_stack
 
     def test_edit_object_text_validates(self):
         """The 'edit_object_text' message requires box_id and text strings."""

@@ -123,6 +123,8 @@ def _coerce_patcher_rect(patcher: Any) -> None:
 
 # maxclasses that are not Max objects (message/comment/UI containers) -> no maxref.
 _NO_MAXREF_CLASSES = {"message", "comment"}
+# Box classes whose content is typed text; UI classes have none to edit.
+_TEXT_EDITABLE_CLASSES = {"newobj", "message", "comment"}
 # Placeholder port types the maxref parser leaves un-substituted; not useful labels.
 _PLACEHOLDER_TYPES = {"INLET_TYPE", "OUTLET_TYPE", ""}
 # Cache maxref lookups by object name (values: {"inlets": [...], "outlets": [...]}
@@ -1317,6 +1319,8 @@ class InteractiveWebSocketHandler:
 
         for box in self.patcher._boxes:
             if box.id == box_id:
+                if (box.maxclass or "newobj") not in _TEXT_EDITABLE_CLASSES:
+                    break
                 self._push_undo()
                 # Box.text is a read-only property backed by __dict__["text"]
                 # (file-loaded) or _kwds["text"] (programmatic). Update both so

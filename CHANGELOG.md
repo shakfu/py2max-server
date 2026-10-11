@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+## [0.4.0]
+
+Moves to py2max 0.6.0 and stops the editor from writing text onto UI boxes.
+
+### Changed
+
+- Requires `py2max>=0.6.0`. Its default layout is now `topdown`, so the REPL's `optimize()` on a served patch places boxes top to bottom and aligns ports. `layout('horizontal')` restores the old placement.
+
+### Fixed
+
+- The REPL's `info()` always printed `Layout: Unknown`. `getattr` does not follow a dotted name such as `"__class__.__name__"`.
+
+- Double-clicking a UI box (`gain~`, `toggle`, ...) opened an empty text editor. Saving it wrote a `text` key onto a box whose class is not `newobj`. The editor now refuses these boxes, and the server ignores `edit_object_text` for them. Since py2max 0.5 these boxes have no text.
+
+- Editor status messages named a UI box by its id (`obj-3`). They now use its class (`gain~`).
+
 ## [0.3.1]
 
 Objects can be resized in the editor. Additive only -- nothing in 0.3.0 changes behaviour.

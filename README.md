@@ -10,7 +10,7 @@ This package was split out of the core `py2max` library so the patch generator s
 pip install py2max-server
 ```
 
-This pulls in `py2max` (the core generator, 0.4.1 or newer) and `websockets`. Python 3.9 or newer.
+This pulls in `py2max` (the core generator, 0.6.0 or newer) and `websockets`. Python 3.9 or newer.
 
 > **Upgrading from 0.2.x:** the standalone terminal REPL is gone in 0.3.0. `py2max-server repl` and the `--repl` / `--log-file` flags have been removed, along with `ReplClient` and friends -- the console now lives in the editor itself. See the [changelog](CHANGELOG.md).
 

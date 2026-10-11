@@ -19,6 +19,10 @@ const RESIZE_HANDLES = ['e', 's', 'se'];
 const RESIZE_CURSORS = { e: 'ew-resize', s: 'ns-resize', se: 'nwse-resize' };
 const RESIZE_HANDLE_SIZE = 8;
 
+// Box classes whose content is typed text. Must match the server's
+// _TEXT_EDITABLE_CLASSES.
+const TEXT_EDITABLE_CLASSES = new Set(['newobj', 'message', 'comment']);
+
 // Handles sit this far outside the box outline. Placed flush on the corner they
 // overlapped the last outlet -- and being drawn after the ports, they stole the
 // clicks meant to start a connection from it.
@@ -1508,7 +1512,7 @@ class InteractiveEditor {
 
         const portType = isOutlet ? 'outlet' : 'inlet';
         const targetType = isOutlet ? 'inlet' : 'outlet';
-        this.updateInfo(`Drag from ${box.text || box.id} ${portType} ${portIndex} to an ${targetType} (or click to arm)`);
+        this.updateInfo(`Drag from ${this.boxLabel(box)} ${portType} ${portIndex} to an ${targetType} (or click to arm)`);
     }
 
     updateConnectionPreview(event) {
@@ -1613,7 +1617,7 @@ class InteractiveEditor {
             src_outlet: src.portIndex,
             dst_inlet: dst.portIndex
         });
-        this.updateInfo(`Connected: ${srcBox?.text || srcId}[${src.portIndex}] -> ${dstBox?.text || dstId}[${dst.portIndex}]`);
+        this.updateInfo(`Connected: ${this.boxLabel(srcBox, srcId)}[${src.portIndex}] -> ${this.boxLabel(dstBox, dstId)}[${dst.portIndex}]`);
     }
 
     handlePortClick(box, portIndex, isOutlet) {
@@ -1627,7 +1631,7 @@ class InteractiveEditor {
 
             const portType = isOutlet ? 'outlet' : 'inlet';
             const nextType = isOutlet ? 'inlet' : 'outlet';
-            this.updateInfo(`Connecting from ${box.text || box.id} ${portType} ${portIndex}... Click ${nextType}`);
+            this.updateInfo(`Connecting from ${this.boxLabel(box)} ${portType} ${portIndex}... Click ${nextType}`);
 
             // Visual feedback - highlight the selected port
             this.render();
@@ -1872,11 +1876,22 @@ class InteractiveEditor {
         }
     }
 
+    boxLabel(box, fallback) {
+        // UI boxes (gain~, toggle, ...) have no text; their name is the maxclass.
+        return box?.text || box?.maxclass || fallback || box?.id || '';
+    }
+
     startTextEdit(box, boxElement) {
         /**
          * Overlay an <input> on the box to edit its text. Commits on Enter/blur,
          * cancels on Escape. Sends edit_object_text to the server on commit.
          */
+        if (!TEXT_EDITABLE_CLASSES.has(box.maxclass || 'newobj')) {
+            // Max has no text editor for UI boxes; retyping one would leave a
+            // `text` key on a box whose class is not newobj.
+            this.updateInfo(`${this.boxLabel(box)} is a UI object; its text cannot be edited`);
+            return;
+        }
         if (!boxElement) {
             boxElement = this.boxesGroup.querySelector(`[data-id="${box.id}"]`);
         }
@@ -1908,7 +1923,7 @@ class InteractiveEditor {
                     box_id: box.id,
                     text: newText
                 });
-                this.updateInfo(`Edited "${box.text || box.id}" -> "${newText}"`);
+                this.updateInfo(`Edited "${this.boxLabel(box)}" -> "${newText}"`);
             } else {
                 this.updateInfo('Edit cancelled');
             }
@@ -3366,7 +3381,7 @@ class InteractiveEditor {
             g.setNode(boxId, {
                 width: width,
                 height: height,
-                label: box.text || boxId
+                label: this.boxLabel(box, boxId)
             });
         });
 

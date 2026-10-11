@@ -348,3 +348,15 @@ def test_both_port_placement_modes_are_offered():
     html = (STATIC / "interactive.html").read_text(encoding="utf-8")
     assert 'id="port-placement"' in html
     assert 'value="max"' in html and 'value="even"' in html
+
+
+def test_text_editable_classes_match_server():
+    """The browser refuses to edit UI boxes; its class list must match the server's."""
+    import re
+
+    from py2max_server.websocket import _TEXT_EDITABLE_CLASSES
+
+    m = re.search(r"TEXT_EDITABLE_CLASSES = new Set\(\[([^\]]*)\]\)", _js())
+    assert m, "TEXT_EDITABLE_CLASSES not found in interactive.js"
+    assert set(re.findall(r"'([^']+)'", m.group(1))) == _TEXT_EDITABLE_CLASSES
+    assert "TEXT_EDITABLE_CLASSES.has(" in _js()

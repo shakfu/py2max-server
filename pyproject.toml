@@ -7,7 +7,7 @@ authors = [
 maintainers = [
     { name = "Shakeeb Alireza", email = "shakfu@users.noreply.github.com" }
 ]
-version = "0.3.1"
+version = "0.4.0"
 readme = "README.md"
 requires-python = ">=3.9"
 keywords = ["Max", "maxpat", "py2max", "websocket", "repl"]
@@ -27,10 +27,9 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    # 0.4.1 fixes rect handling on patches loaded from disk; without it any
-    # layout call on a served patch (including the REPL's optimize()) raises
-    # AttributeError, since every rect arrives from JSON as a plain list.
-    "py2max>=0.4.1",
+    # 0.4.1 fixed rect handling on loaded patches (the REPL's optimize()
+    # raised AttributeError). 0.6.0 makes "topdown" the default layout.
+    "py2max>=0.6.0",
     "websockets>=12.0",
 ]
 

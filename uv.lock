@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.9"
 resolution-markers = [
     "python_full_version >= '3.15'",
@@ -585,14 +585,14 @@ wheels = [
 
 [[package]]
 name = "py2max"
-version = "0.4.1"
+version = "0.6.0"
 source = { editable = "../py2max" }
 
 [package.metadata]
 requires-dist = [
     { name = "graph-layout", marker = "extra == 'graph'", specifier = ">=0.4" },
     { name = "hola-graph", marker = "extra == 'graph'", specifier = ">=0.1" },
-    { name = "ogdf-py", marker = "python_full_version >= '3.10' and extra == 'graph'", specifier = ">=0.3" },
+    { name = "ogdf-py", marker = "python_full_version >= '3.10' and extra == 'graph'", specifier = ">=0.5.1" },
 ]
 provides-extras = ["graph"]
 
@@ -612,7 +612,7 @@ docs = [
 
 [[package]]
 name = "py2max-server"
-version = "0.3.1"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "py2max" },

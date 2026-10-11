@@ -62,7 +62,7 @@ class ReplCommands:
         filepath = self.patcher.filepath or "Untitled"
         boxes = len(self.patcher._boxes)
         lines = len(self.patcher._lines)
-        layout = getattr(self.patcher._layout_mgr, "__class__.__name__", "Unknown")
+        layout = type(self.patcher._layout_mgr).__name__
         clients = len(self.server.handler.clients)
 
         print()
@@ -158,8 +158,8 @@ class ReplCommands:
         """Change layout manager.
 
         Args:
-            layout_type: Layout type ('horizontal', 'vertical', 'grid', 'flow',
-                        'columnar', 'matrix')
+            layout_type: Layout type ('topdown', 'horizontal', 'vertical',
+                        'grid', 'flow', 'columnar', 'matrix')
 
         Example:
             >>> layout('flow')
