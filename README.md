@@ -48,7 +48,7 @@ Auto-save is off by default because an editor action you did not intend should n
 
 - Select an object to get resize handles on its right edge, bottom edge and bottom-right corner. Any object can be resized, though it matters most for UI objects like `scope~`, `function` and `live.gain~`; Max reasserts its own size for objects that are not resizable.
 
-- Drag from one port to another to connect; click a cord to select it.
+- Drag from one port to another to connect, or click one port and then the other. Either way, the nearest compatible port within 20px is highlighted and takes the connection. Click a cord to select it.
 
 - Double-click empty canvas to create an object, with type-ahead over common Max objects.
 

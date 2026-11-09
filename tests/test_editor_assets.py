@@ -189,6 +189,32 @@ def test_port_geometry_has_a_single_source_of_truth():
     )
 
 
+def test_connect_preview_and_drop_share_one_target():
+    """The highlighted port must be the one a release connects to.
+
+    Preview and drop each resolve the target. If they use different rules, the
+    cord can snap to one port and connect to another, or to none.
+    """
+    js = _js()
+    for signature in ("updateConnectionPreview(event) {", "finishConnectionDrag(event) {"):
+        block = _balanced_block(js, js.index(signature))
+        assert "this.snapTarget(event, " in block, f"{signature} bypasses snapTarget"
+        assert "elementFromPoint" not in block, f"{signature} uses an exact hit test"
+
+    # Two-click connect: hover and completion share armedSnapTarget.
+    for signature in ("updateArmedHover(event) {", "completeArmedConnection(event) {"):
+        block = _balanced_block(js, js.index(signature))
+        assert "this.armedSnapTarget(event)" in block, f"{signature} bypasses armedSnapTarget"
+
+    # Both press handlers must try the armed snap; else a near-miss on a box
+    # body or the canvas cancels the connection instead.
+    for signature in ("handleBoxMouseDown(event, box) {", "handleCanvasMouseDown(event) {"):
+        block = _balanced_block(js, js.index(signature))
+        assert "this.completeArmedConnection(event)" in block, (
+            f"{signature} ignores the armed connection"
+        )
+
+
 def test_straighten_is_one_undo_step():
     """Straighten moves many boxes, so it must send one batched message.
 

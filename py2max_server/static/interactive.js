@@ -5,6 +5,8 @@
 
 // Rendered diameter of an inlet/outlet glyph, in patch units.
 const PORT_DIAMETER = 8;
+// Connect drags snap to the nearest compatible port within this many screen pixels.
+const PORT_SNAP_RADIUS = 20;
 
 // Extra gap between a box corner and the outermost port, on top of the half
 // glyph needed to keep the circle inside the outline. Max does not put its
@@ -1303,6 +1305,8 @@ class InteractiveEditor {
             return;
         }
 
+        if (this.completeArmedConnection(event)) return;
+
         // Stop propagation for ALL boxes to prevent canvas handler from running
         event.stopPropagation();
 
@@ -1395,6 +1399,10 @@ class InteractiveEditor {
         if (this.connectionDrag) {
             this.updateConnectionPreview(event);
             return;
+        }
+
+        if (this.connectionStart) {
+            this.updateArmedHover(event);
         }
 
         if (this.marquee) {
@@ -1495,7 +1503,9 @@ class InteractiveEditor {
         event.preventDefault();
 
         const start = this.getPortPosition(box, portIndex, isOutlet);
-        this.connectionDrag = { box, portIndex, isOutlet, start, moved: false };
+        const targetClass = isOutlet ? 'inlet' : 'outlet';
+        const targets = Array.from(this.boxesGroup.querySelectorAll('.' + targetClass));
+        this.connectionDrag = { box, portIndex, isOutlet, start, targets, moved: false };
 
         // Rubber-band cord from the armed port to the cursor.
         this.previewLine = this.draw
@@ -1505,10 +1515,7 @@ class InteractiveEditor {
         this.previewLine.attr('pointer-events', 'none');
 
         // Highlight all compatible (opposite-type) targets for the drag.
-        const targetClass = isOutlet ? 'inlet' : 'outlet';
-        this.boxesGroup.querySelectorAll('.' + targetClass).forEach(el => {
-            el.classList.add('connect-compatible');
-        });
+        targets.forEach(el => el.classList.add('connect-compatible'));
 
         const portType = isOutlet ? 'outlet' : 'inlet';
         const targetType = isOutlet ? 'inlet' : 'outlet';
@@ -1526,25 +1533,52 @@ class InteractiveEditor {
             if (dx > 5 || dy > 5) this.connectionDrag.moved = true;
         }
 
-        if (this.previewLine) {
-            this.previewLine.plot(start.x, start.y, pt.x, pt.y);
-        }
-
-        // Strong-highlight the compatible port directly under the cursor.
+        // Strong-highlight the port a release would connect to, and end the
+        // cord on it rather than at the cursor.
         if (this._hoverPort) {
             this._hoverPort.classList.remove('connect-hover');
             this._hoverPort = null;
         }
-        const info = this.portInfoFromPoint(event.clientX, event.clientY);
-        if (info && info.isOutlet !== this.connectionDrag.isOutlet) {
+        const info = this.snapTarget(event, this.connectionDrag.targets);
+        if (info) {
             info.el.classList.add('connect-hover');
             this._hoverPort = info.el;
         }
+        const end = info ? info.center : pt;
+        if (this.previewLine) {
+            this.previewLine.plot(start.x, start.y, end.x, end.y);
+        }
+    }
+
+    snapTarget(event, targets) {
+        /** Nearest port in targets within PORT_SNAP_RADIUS screen px, or null. */
+        let best = null;
+        let bestDist = PORT_SNAP_RADIUS;
+        for (const el of targets) {
+            const r = el.getBoundingClientRect();
+            const cx = r.left + r.width / 2;
+            const cy = r.top + r.height / 2;
+            const dist = Math.hypot(event.clientX - cx, event.clientY - cy);
+            if (dist <= bestDist) {
+                bestDist = dist;
+                best = { el, cx, cy };
+            }
+        }
+        if (!best) return null;
+        const group = best.el.closest('[data-id]');
+        if (!group) return null;
+        return {
+            el: best.el,
+            boxId: group.getAttribute('data-id'),
+            index: parseInt(best.el.getAttribute('data-index') || '0', 10),
+            isOutlet: best.el.classList.contains('outlet'),
+            center: this.getSVGPoint({ clientX: best.cx, clientY: best.cy }),
+        };
     }
 
     finishConnectionDrag(event) {
         const drag = this.connectionDrag;
-        const target = this.portInfoFromPoint(event.clientX, event.clientY);
+        const target = this.snapTarget(event, drag.targets);
 
         // Clear preview + highlights first so any subsequent render is clean.
         this.clearConnectionDrag();
@@ -1584,23 +1618,6 @@ class InteractiveEditor {
         this.connectionDrag = null;
     }
 
-    portInfoFromPoint(clientX, clientY) {
-        /** Resolve the port element at a screen point to {el, boxId, index, isOutlet}. */
-        const el = document.elementFromPoint(clientX, clientY);
-        if (!el || !el.classList) return null;
-        const isInlet = el.classList.contains('inlet');
-        const isOutlet = el.classList.contains('outlet');
-        if (!isInlet && !isOutlet) return null;
-        const group = el.closest('[data-id]');
-        if (!group) return null;
-        return {
-            el,
-            boxId: group.getAttribute('data-id'),
-            index: parseInt(el.getAttribute('data-index') || '0', 10),
-            isOutlet
-        };
-    }
-
     makeConnection(src, dst) {
         /**
          * Send a create_connection. src/dst are {box|boxId, portIndex}; src is the
@@ -1618,6 +1635,40 @@ class InteractiveEditor {
             dst_inlet: dst.portIndex
         });
         this.updateInfo(`Connected: ${this.boxLabel(srcBox, srcId)}[${src.portIndex}] -> ${this.boxLabel(dstBox, dstId)}[${dst.portIndex}]`);
+    }
+
+    armedSnapTarget(event) {
+        /** Port a click would connect to while a two-click connection is armed. */
+        const cls = this.connectionStart.isOutlet ? '.inlet' : '.outlet';
+        return this.snapTarget(event, this.boxesGroup.querySelectorAll(cls));
+    }
+
+    updateArmedHover(event) {
+        if (this._hoverPort) {
+            this._hoverPort.classList.remove('connect-hover');
+            this._hoverPort = null;
+        }
+        const info = this.armedSnapTarget(event);
+        if (info) {
+            info.el.classList.add('connect-hover');
+            this._hoverPort = info.el;
+        }
+    }
+
+    completeArmedConnection(event) {
+        /**
+         * While armed, a press near (not on) a compatible port completes the
+         * connection. Returns true if it did. Presses on a port itself go
+         * through handlePortMouseDown.
+         */
+        if (!this.connectionStart) return false;
+        const info = this.armedSnapTarget(event);
+        const box = info && this.boxes.get(info.boxId);
+        if (!box) return false;
+        event.stopPropagation();
+        event.preventDefault();
+        this.handlePortClick(box, info.index, info.isOutlet);
+        return true;
     }
 
     handlePortClick(box, portIndex, isOutlet) {
@@ -1720,6 +1771,10 @@ class InteractiveEditor {
             // Clicking on a port - let the port's click handler handle it
             return;
         }
+
+        // Before the cord check: cords end at inlets, so a press near one often
+        // lands on a cord hitbox.
+        if (this.completeArmedConnection(event)) return;
 
         // Check if clicking on a line - if so, don't deselect
         if (target.classList.contains('patchline') ||

@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format is based on 
 
 ## [Unreleased]
 
+### Changed
+
+- Connecting snaps to the nearest compatible port within 20 screen pixels, for both drag and two-click connect. The target port is highlighted before release, and a dragged cord ends on it. Before, the pointer had to land on the 8px port itself, or the connection was cancelled. The radius is in screen pixels rather than patch units, so it does not shrink when zoomed out.
+
+- While a two-click connection is armed, a press on a box body within 20px of a compatible port connects instead of selecting the box.
+
 ## [0.4.0]
 
 Moves to py2max 0.6.0 and stops the editor from writing text onto UI boxes.
