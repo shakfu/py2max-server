@@ -34,6 +34,7 @@ coverage: ## Generate HTML coverage report
 
 lint: ## Run code linting (with autofix)
 	@uv run ruff check . --fix
+	@uv run ruff format --check .
 
 format: ## Run code formatting
 	@uv run ruff format .

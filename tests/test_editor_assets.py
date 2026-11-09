@@ -196,7 +196,10 @@ def test_connect_preview_and_drop_share_one_target():
     cord can snap to one port and connect to another, or to none.
     """
     js = _js()
-    for signature in ("updateConnectionPreview(event) {", "finishConnectionDrag(event) {"):
+    for signature in (
+        "updateConnectionPreview(event) {",
+        "finishConnectionDrag(event) {",
+    ):
         block = _balanced_block(js, js.index(signature))
         assert "this.snapTarget(event, " in block, f"{signature} bypasses snapTarget"
         assert "elementFromPoint" not in block, f"{signature} uses an exact hit test"
@@ -204,11 +207,16 @@ def test_connect_preview_and_drop_share_one_target():
     # Two-click connect: hover and completion share armedSnapTarget.
     for signature in ("updateArmedHover(event) {", "completeArmedConnection(event) {"):
         block = _balanced_block(js, js.index(signature))
-        assert "this.armedSnapTarget(event)" in block, f"{signature} bypasses armedSnapTarget"
+        assert "this.armedSnapTarget(event)" in block, (
+            f"{signature} bypasses armedSnapTarget"
+        )
 
     # Both press handlers must try the armed snap; else a near-miss on a box
     # body or the canvas cancels the connection instead.
-    for signature in ("handleBoxMouseDown(event, box) {", "handleCanvasMouseDown(event) {"):
+    for signature in (
+        "handleBoxMouseDown(event, box) {",
+        "handleCanvasMouseDown(event) {",
+    ):
         block = _balanced_block(js, js.index(signature))
         assert "this.completeArmedConnection(event)" in block, (
             f"{signature} ignores the armed connection"
